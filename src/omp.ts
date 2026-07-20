@@ -1,10 +1,12 @@
 import { streamOpenAICompletions, type OpenAICompletionsOptions } from "@oh-my-pi/pi-ai";
 import { extractOmniRouteModel, omniRouteConfigPath, resolvedRouteStatus, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
 
+type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface OmpExtensionAPI {
   registerProvider(name: string, config: OmpProviderConfig): void;
-  on(event: "message_update", handler: (event: unknown, context: OmpContext) => void): void;
-  on(event: "session_start", handler: (event: unknown, context: OmpContext) => void): void;
+  getThinkingLevel(): ReasoningEffort | undefined;
+  on(event: string, handler: (event: { payload?: unknown }, context: OmpContext) => unknown): void;
 }
 
 interface OmpContext {
@@ -53,6 +55,19 @@ function observeRouteResponse(
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
+function withComboReasoningEffort(
+  payload: unknown,
+  comboIds: Set<string>,
+  reasoning: ReasoningEffort | undefined,
+): unknown {
+  if (!reasoning || !payload || typeof payload !== "object") return payload;
+  const body = payload as Record<string, unknown>;
+  if (typeof body.model !== "string" || !comboIds.has(body.model)) return payload;
+  if (body.reasoning_effort !== undefined || body.reasoning !== undefined) return payload;
+  body.reasoning_effort = reasoning;
+  return payload;
+}
+
 function createOmpRouteStream(api: OmpExtensionAPI, comboIds: Set<string>): typeof streamOpenAICompletions {
   const routeNames = new Map<string, string>();
   let statusContext: OmpContext | undefined;
@@ -79,8 +94,10 @@ function createOmpRouteStream(api: OmpExtensionAPI, comboIds: Set<string>): type
       routeNames.set(requestedCombo, status);
       statusContext?.ui.setStatus("omniroute-route", undefined);
     };
+    const simpleOptions = options as OpenAICompletionsOptions & { reasoning?: ReasoningEffort };
     const wrappedOptions: OpenAICompletionsOptions = {
-      ...options,
+      ...simpleOptions,
+      reasoning: simpleOptions.reasoning ?? api.getThinkingLevel(),
       fetch: requestedCombo
         ? async (input, init) => observeRouteResponse(await callerFetch(input, init), requestedCombo, updateRoute)
         : callerFetch,
@@ -101,6 +118,11 @@ export async function activateOmp(
   const discovery = await tryDiscoverModels(environment, fetcher, omniRouteConfigPath("omp", environment));
   if (!discovery) return;
   const { config, catalog: { models, comboIds } } = discovery;
+  api.on("before_provider_request", event => withComboReasoningEffort(
+    event.payload,
+    comboIds,
+    api.getThinkingLevel(),
+  ));
   api.registerProvider("omniroute", {
     name: "OmniRoute",
     baseUrl: `${config.baseUrl}/v1`,

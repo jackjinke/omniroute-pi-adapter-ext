@@ -14,15 +14,22 @@ interface RegisteredProvider {
   streamSimple?: (...args: any[]) => AsyncIterable<unknown>;
 }
 
+type FakeOmpHandler = (event: { payload?: unknown }, context: FakeContext) => unknown;
+
 class FakeOmpHost implements OmpExtensionAPI {
   provider?: { name: string; config: RegisteredProvider };
-  handlers = new Map<string, Array<(event: unknown, context: FakeContext) => void>>();
+  thinkingLevel?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  handlers = new Map<string, FakeOmpHandler[]>();
 
   registerProvider(name: string, config: RegisteredProvider): void {
     this.provider = { name, config };
   }
 
-  on(event: string, handler: (event: unknown, context: FakeContext) => void): void {
+  getThinkingLevel(): "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | undefined {
+    return this.thinkingLevel;
+  }
+
+  on(event: string, handler: FakeOmpHandler): void {
     const handlers = this.handlers.get(event) ?? [];
     handlers.push(handler);
     this.handlers.set(event, handlers);
@@ -31,7 +38,16 @@ class FakeOmpHost implements OmpExtensionAPI {
   emit(event: string, context: FakeContext): void {
     for (const handler of this.handlers.get(event) ?? []) handler({}, context);
   }
+  async emitBeforeProviderRequest(payload: unknown, context: FakeContext): Promise<unknown> {
+    let current = payload;
+    for (const handler of this.handlers.get("before_provider_request") ?? []) {
+      current = await handler({ payload: current }, context) ?? current;
+    }
+    return current;
+  }
+
 }
+
 
 interface FakeContext {
   model?: { id: string; name: string };
@@ -72,7 +88,7 @@ describe("shared catalog logic", () => {
           thinking: true,
           tool_calling: true,
           vision: true,
-          effort_tiers: ["none", "low", "medium", "high", "xhigh", "max", "ultra"],
+          effort_tiers: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
         },
       }],
     }, {
@@ -91,6 +107,16 @@ describe("shared catalog logic", () => {
       maxTokens: 64000,
       compat: { supportsReasoningEffort: true },
     });
+  });
+
+  test("excludes minimal from discovered and default effort levels", () => {
+    const discovered = normalizeCatalog({
+      data: [{ id: "combo/coding", capabilities: { reasoning: true, effort_tiers: ["minimal", "low", "high"] } }],
+    }, { effortOverrides: {} });
+    expect(discovered.models[0]?.thinking?.efforts).toEqual(["low", "high"]);
+    expect(normalizeCatalog({
+      data: [{ id: "default", capabilities: { reasoning: true } }],
+    }, { effortOverrides: {} }).models[0]?.thinking?.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   test("applies exact, wildcard, catalog, then default effort precedence", () => {
@@ -131,6 +157,8 @@ describe("shared catalog logic", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "omniroute-invalid-config-"));
     const configPath = join(agentDir, "omniroute.yml");
     writeFileSync(configPath, "combo/custom: [ultra]\n");
+    expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow("Unsupported reasoning effort");
+    writeFileSync(configPath, "combo/custom: [minimal]\n");
     expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow("Unsupported reasoning effort");
     writeFileSync(configPath, "[broken");
     expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow("Invalid OmniRoute config");
@@ -227,6 +255,55 @@ describe("OMP adapter", () => {
     for await (const _event of events) { /* consume the provider stream */ }
 
     expect(requestBody?.reasoning_effort).toBe("max");
+  });
+
+  test("uses OMP's live thinking level when custom API options omit reasoning", async () => {
+    const host = new FakeOmpHost();
+    host.thinkingLevel = "high";
+    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+      data: [{ id: "combo/coding", owned_by: "combo", capabilities: { reasoning: true } }],
+    }));
+
+    let requestBody: Record<string, unknown> | undefined;
+    const model = {
+      ...host.provider!.config.models[0],
+      provider: "omniroute",
+      api: "omniroute-openai-completions",
+      baseUrl: "http://router.test/v1",
+    } as never;
+    const events = host.provider!.config.streamSimple!(model, {
+      messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+    } as never, {
+      apiKey: "secret",
+      fetch: async (_input: string | URL | Request, init?: RequestInit) => {
+        requestBody = JSON.parse(String(init?.body));
+        return new Response("data: [DONE]\\n\\n", { headers: { "Content-Type": "text/event-stream" } });
+      },
+    });
+    for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(requestBody?.reasoning_effort).toBe("high");
+  });
+
+  test("injects the live effort into combo payloads after provider shaping", async () => {
+    const host = new FakeOmpHost();
+    host.thinkingLevel = "xhigh";
+    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+      data: [
+        { id: "combo/coding", owned_by: "combo", capabilities: { reasoning: true } },
+        { id: "direct/model", owned_by: "provider", capabilities: { reasoning: true } },
+      ],
+    }));
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+
+    expect(await host.emitBeforeProviderRequest({ model: "combo/coding", messages: [] }, context)).toMatchObject({
+      model: "combo/coding",
+      reasoning_effort: "xhigh",
+    });
+    expect(await host.emitBeforeProviderRequest({ model: "direct/model", messages: [] }, context)).toEqual({
+      model: "direct/model",
+      messages: [],
+    });
   });
 
   test("continues startup without registering when discovery fails", async () => {
