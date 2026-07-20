@@ -62,15 +62,15 @@ describe("shared catalog logic", () => {
         },
       }],
     }, {
-      efforts: ["low", "medium", "high"],
+      effortOverrides: { "combo/coding": ["low", "medium", "high", "max"] },
     });
 
     expect(result.comboIds.has("combo/coding")).toBeTrue();
     expect(result.models[0]).toMatchObject({
       id: "combo/coding",
       reasoning: true,
-      thinking: { mode: "effort", efforts: ["low", "medium", "high", "xhigh", "max"] },
-      thinkingLevelMap: { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" },
+      thinking: { mode: "effort", efforts: ["low", "medium", "high", "max"] },
+      thinkingLevelMap: { low: "low", medium: "medium", high: "high", max: "max" },
       input: ["text", "image"],
       contextWindow: 200000,
       maxTokens: 64000,
@@ -78,18 +78,49 @@ describe("shared catalog logic", () => {
     });
   });
 
-  test("rejects malformed and empty catalogs", () => {
-    expect(() => normalizeCatalog({}, { efforts: ["low"] })).toThrow("data[]");
-    expect(() => normalizeCatalog({ data: [] }, { efforts: ["low"] })).toThrow("no usable models");
+  test("applies exact, wildcard, catalog, then default effort precedence", () => {
+    const payload = {
+      data: [
+        { id: "exact", capabilities: { reasoning: true, effort_tiers: ["low"] } },
+        { id: "wildcard", capabilities: { reasoning: true, effort_tiers: ["medium"] } },
+      ],
+    };
+    const overridden = normalizeCatalog(payload, {
+      effortOverrides: { exact: ["max"], "*": ["high", "xhigh"] },
+    });
+    expect(overridden.models.map(model => model.thinking?.efforts)).toEqual([["max"], ["high", "xhigh"]]);
+
+    const discovered = normalizeCatalog(payload, { effortOverrides: {} });
+    expect(discovered.models.map(model => model.thinking?.efforts)).toEqual([["low"], ["medium"]]);
+    expect(normalizeCatalog({
+      data: [{ id: "default", capabilities: { reasoning: true } }],
+    }, { effortOverrides: {} }).models[0]?.thinking?.efforts).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
-  test("preserves max when configured and defaults without it", () => {
-    const overridden = readConfig({
+  test("reads per-model and global effort overrides", () => {
+    const perModel = readConfig({
       OMNIROUTE_API_KEY: "secret",
-      OMNIROUTE_REASONING_EFFORTS: "low, medium, high, xhigh, max",
+      OMNIROUTE_REASONING_EFFORTS: '{"combo/custom":["low","max"]}',
     });
-    expect(overridden.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(readConfig({ OMNIROUTE_API_KEY: "secret" }).efforts).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(perModel.effortOverrides).toEqual({ "combo/custom": ["low", "max"] });
+    expect(readConfig({
+      OMNIROUTE_API_KEY: "secret",
+      OMNIROUTE_REASONING_EFFORTS: "low, medium, high, xhigh",
+    }).effortOverrides).toEqual({ "*": ["low", "medium", "high", "xhigh"] });
+    expect(readConfig({ OMNIROUTE_API_KEY: "secret" }).effortOverrides).toEqual({});
+  });
+
+  test("rejects invalid catalogs and effort overrides", () => {
+    expect(() => normalizeCatalog({}, { effortOverrides: {} })).toThrow("data[]");
+    expect(() => normalizeCatalog({ data: [] }, { effortOverrides: {} })).toThrow("no usable models");
+    expect(() => readConfig({
+      OMNIROUTE_API_KEY: "secret",
+      OMNIROUTE_REASONING_EFFORTS: '{"combo/custom":["ultra"]}',
+    })).toThrow("Unsupported reasoning effort");
+    expect(() => readConfig({
+      OMNIROUTE_API_KEY: "secret",
+      OMNIROUTE_REASONING_EFFORTS: "{broken",
+    })).toThrow("valid JSON");
   });
 
   test("extracts the concrete model from OmniRoute's SSE trailer", () => {
@@ -120,13 +151,13 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.models.map(model => model.id)).toEqual(["combo/coding"]);
   });
 
-  test("fails startup instead of registering an empty provider", async () => {
+  test("continues startup without registering when discovery fails", async () => {
     const host = new FakeOmpHost();
-    await expect(activateOmp(
+    await activateOmp(
       host,
       { OMNIROUTE_API_KEY: "secret" },
       async () => new Response("unavailable", { status: 503 }),
-    )).rejects.toThrow("HTTP 503");
+    );
     expect(host.provider).toBeUndefined();
   });
 });

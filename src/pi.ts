@@ -1,4 +1,4 @@
-import { discoverModels, readConfig, type OmniRouteModel } from "./shared.ts";
+import { tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
 
 export interface PiExtensionAPI {
   registerProvider(name: string, config: PiProviderConfig): void;
@@ -78,10 +78,11 @@ export async function activatePi(
   environment: Record<string, string | undefined> = process.env,
   fetcher: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = fetch,
 ): Promise<void> {
-  const config = readConfig(environment);
-  const { models, comboIds } = await discoverModels(config, fetcher);
+  const discovery = await tryDiscoverModels(environment, fetcher);
+  if (!discovery) return;
+  const { config, catalog: { models, comboIds } } = discovery;
   const piModels = models.map(({ thinking: _thinking, ...model }) => model);
-  api.registerProvider(config.providerName, {
+  api.registerProvider("omniroute", {
     name: "OmniRoute",
     baseUrl: `${config.baseUrl}/v1`,
     apiKey: config.apiKey,

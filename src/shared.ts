@@ -25,9 +25,8 @@ export interface OmniRouteCatalog {
 export interface OmniRouteConfig {
   baseUrl: string;
   apiKey: string;
-  providerName: string;
   timeoutMs: number;
-  efforts: string[];
+  effortOverrides: Record<string, string[]>;
 }
 
 function positiveInteger(value: string | undefined, fallback: number): number {
@@ -39,26 +38,49 @@ function positiveInteger(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
+function parseEfforts(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array of reasoning efforts`);
+  const supported: Record<string, true> = { minimal: true, low: true, medium: true, high: true, xhigh: true, max: true };
+  const efforts = value
+    .filter((effort): effort is string => typeof effort === "string")
+    .map(effort => effort.trim().toLowerCase())
+    .filter(Boolean);
+  if (efforts.length === 0) throw new Error(`${label} must contain at least one reasoning effort`);
+  for (const effort of efforts) {
+    if (!supported[effort]) throw new Error(`Unsupported reasoning effort in ${label}: ${effort}`);
+  }
+  return [...new Set(efforts)];
+}
+
+function readEffortOverrides(raw: string | undefined): Record<string, string[]> {
+  if (!raw?.trim()) return {};
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{")) return { "*": parseEfforts(trimmed.split(","), "OMNIROUTE_REASONING_EFFORTS") };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(`OMNIROUTE_REASONING_EFFORTS must be valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("OMNIROUTE_REASONING_EFFORTS must be a JSON object keyed by model ID");
+  }
+  return Object.fromEntries(
+    Object.entries(parsed).map(([modelId, efforts]) => [modelId, parseEfforts(efforts, `OMNIROUTE_REASONING_EFFORTS[${modelId}]`)]),
+  );
+}
+
 export function readConfig(environment: Record<string, string | undefined> = process.env): OmniRouteConfig {
   const apiKey = environment.OMNIROUTE_API_KEY?.trim();
   if (!apiKey) throw new Error("Missing OmniRoute API key in OMNIROUTE_API_KEY");
 
-  const efforts = (environment.OMNIROUTE_REASONING_EFFORTS || DEFAULT_EFFORTS.join(","))
-    .split(",")
-    .map(value => value.trim().toLowerCase())
-    .filter(Boolean);
-  if (efforts.length === 0) throw new Error("OMNIROUTE_REASONING_EFFORTS must contain at least one effort");
-
-  const supported: Record<string, true> = { minimal: true, low: true, medium: true, high: true, xhigh: true, max: true };
-  for (const effort of efforts) {
-    if (!supported[effort]) throw new Error(`Unsupported reasoning effort: ${effort}`);
-  }
+  const effortOverrides = readEffortOverrides(environment.OMNIROUTE_REASONING_EFFORTS);
   return {
     baseUrl: (environment.OMNIROUTE_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, ""),
     apiKey,
-    providerName: environment.OMNIROUTE_PROVIDER_NAME?.trim() || "omniroute",
     timeoutMs: positiveInteger(environment.OMNIROUTE_STARTUP_TIMEOUT_MS, 15_000),
-    efforts,
+    effortOverrides,
   };
 }
 
@@ -85,7 +107,7 @@ function readCatalogEfforts(capabilities: object): string[] | undefined {
 
 export function normalizeCatalog(
   payload: unknown,
-  config: Pick<OmniRouteConfig, "efforts">,
+  config: Pick<OmniRouteConfig, "effortOverrides">,
 ): OmniRouteCatalog {
   if (!payload || typeof payload !== "object") throw new Error("OmniRoute /v1/models returned a non-object response");
   if (!("data" in payload) || !Array.isArray(payload.data)) {
@@ -124,8 +146,10 @@ export function normalizeCatalog(
     };
 
     if (reasoning) {
-      const catalogEfforts = readCatalogEfforts(capabilities);
-      const efforts = catalogEfforts ?? config.efforts;
+      const efforts = config.effortOverrides[id]
+        ?? config.effortOverrides["*"]
+        ?? readCatalogEfforts(capabilities)
+        ?? [...DEFAULT_EFFORTS];
       model.thinking = { mode: "effort", efforts };
       model.thinkingLevelMap = Object.fromEntries(efforts.map(effort => [effort, effort]));
     }
@@ -156,6 +180,19 @@ export async function discoverModels(
     throw new Error(`OmniRoute model discovery failed with HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
   }
   return normalizeCatalog(await response.json(), config);
+}
+
+export async function tryDiscoverModels(
+  environment: Record<string, string | undefined> = process.env,
+  fetcher: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = fetch,
+): Promise<{ config: OmniRouteConfig; catalog: OmniRouteCatalog } | undefined> {
+  try {
+    const config = readConfig(environment);
+    return { config, catalog: await discoverModels(config, fetcher) };
+  } catch (error) {
+    console.warn(`[omniroute] Startup model discovery skipped: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
 }
 
 export function extractOmniRouteModel(rawLines: readonly string[]): string | undefined {
