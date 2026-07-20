@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activatePi, type PiExtensionAPI } from "../src/pi.ts";
 import { activateOmp, type OmpExtensionAPI } from "../src/omp.ts";
-import { extractOmniRouteModel, normalizeCatalog, omniRouteConfigPath, readConfig } from "../src/shared.ts";
+import { extractOmniRouteModel, normalizeCatalog, omniRouteConfigPath, readConfig, resolvedRouteStatus } from "../src/shared.ts";
 
 interface RegisteredProvider {
   baseUrl: string;
@@ -71,6 +71,7 @@ describe("shared catalog logic", () => {
     expect(result.comboIds.has("combo/coding")).toBeTrue();
     expect(result.models[0]).toMatchObject({
       id: "combo/coding",
+      name: "combo/coding",
       reasoning: true,
       thinking: { mode: "effort", efforts: ["low", "medium", "high", "max"] },
       thinkingLevelMap: { low: "low", medium: "medium", high: "high", max: "max" },
@@ -131,6 +132,10 @@ describe("shared catalog logic", () => {
       "data: [DONE]",
     ])).toBe("gpt-5.6-sol");
     expect(extractOmniRouteModel(["data: [DONE]"])).toBeUndefined();
+  });
+
+  test("formats resolved combos using raw IDs", () => {
+    expect(resolvedRouteStatus("combo/my_combo", "vendor/model-id")).toBe("combo/my_combo → vendor/model-id");
   });
 });
 

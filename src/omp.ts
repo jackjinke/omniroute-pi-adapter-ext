@@ -1,5 +1,5 @@
 import { streamOpenAICompletions, type OpenAICompletionsOptions } from "@oh-my-pi/pi-ai";
-import { extractOmniRouteModel, omniRouteConfigPath, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
+import { extractOmniRouteModel, omniRouteConfigPath, resolvedRouteStatus, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
 
 export interface OmpExtensionAPI {
   registerProvider(name: string, config: OmpProviderConfig): void;
@@ -48,7 +48,7 @@ function createOmpRouteStream(api: OmpExtensionAPI, comboIds: Set<string>): type
 
   api.on("message_update", (_event, context) => {
     if (!resolvedRoute) return;
-    lastStatus = `${resolvedRoute.combo} → ${resolvedRoute.model}`;
+    lastStatus = resolvedRouteStatus(resolvedRoute.combo, resolvedRoute.model);
     resolvedRoute = undefined;
     if (context.hasUI) context.ui.setStatus("omniroute-route", lastStatus);
   });

@@ -1,4 +1,4 @@
-import { omniRouteConfigPath, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
+import { omniRouteConfigPath, resolvedRouteStatus, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
 
 export interface PiExtensionAPI {
   registerProvider(name: string, config: PiProviderConfig): void;
@@ -69,7 +69,7 @@ function installPiRouteStatus(
     if (!response.ok) return;
     const row = callLogRows(await response.json()).find(candidate => candidate.requestedModel === combo);
     if (typeof row?.model !== "string" || row.model === combo) return;
-    if (context.hasUI) context.ui.setStatus("omniroute-route", `${combo} → ${row.model}`);
+    if (context.hasUI) context.ui.setStatus("omniroute-route", resolvedRouteStatus(combo, row.model));
   });
 }
 

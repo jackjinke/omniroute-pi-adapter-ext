@@ -110,12 +110,6 @@ function positiveNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
-function displayName(id: string): string {
-  return id
-    .split("/")
-    .map(part => part.replace(/[-_]+/g, " ").replace(/\b\w/g, letter => letter.toUpperCase()))
-    .join(" / ");
-}
 
 function readCatalogEfforts(capabilities: object): string[] | undefined {
   if (!("effort_tiers" in capabilities) || !Array.isArray(capabilities.effort_tiers)) return undefined;
@@ -151,7 +145,7 @@ export function normalizeCatalog(
 
     const model: OmniRouteModel = {
       id,
-      name: displayName(id),
+      name: id,
       reasoning,
       input: ("vision" in capabilities && capabilities.vision === true)
         || ("image_input" in capabilities && capabilities.image_input === true)
@@ -212,10 +206,13 @@ export async function tryDiscoverModels(
   try {
     const config = readConfig(environment, effortConfigPath);
     return { config, catalog: await discoverModels(config, fetcher) };
-  } catch (error) {
-    console.warn(`[omniroute] Startup model discovery skipped: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
     return undefined;
   }
+}
+
+export function resolvedRouteStatus(comboId: string, modelId: string): string {
+  return `${comboId} → ${modelId}`;
 }
 
 export function extractOmniRouteModel(rawLines: readonly string[]): string | undefined {
