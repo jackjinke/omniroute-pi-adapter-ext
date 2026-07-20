@@ -8,7 +8,6 @@ export interface OmpExtensionAPI {
 }
 
 interface OmpContext {
-  model?: { id: string; name: string };
   hasUI: boolean;
   ui: {
     setStatus(key: string, text: string | undefined): void;
@@ -66,17 +65,13 @@ function createOmpRouteStream(api: OmpExtensionAPI, comboIds: Set<string>): type
   return (model, context, options) => {
     const requestedCombo = comboIds.has(model.id) ? model.id : undefined;
     const callerFetch = options?.fetch ?? fetch;
-    if (requestedCombo) model.name = requestedCombo;
-    const updateModelName = (name: string) => {
-      model.name = name;
-      const activeModel = statusContext?.model;
-      if (activeModel && activeModel.id === requestedCombo) activeModel.name = name;
-      statusContext?.ui.setStatus("omniroute-route", undefined);
+    const updateStatus = (status: string) => {
+      if (statusContext?.hasUI) statusContext.ui.setStatus("omniroute-route", status);
     };
     const wrappedOptions: OpenAICompletionsOptions = {
       ...options,
       fetch: requestedCombo
-        ? async (input, init) => observeRouteResponse(await callerFetch(input, init), requestedCombo, updateModelName)
+        ? async (input, init) => observeRouteResponse(await callerFetch(input, init), requestedCombo, updateStatus)
         : callerFetch,
     };
     return streamOpenAICompletions(

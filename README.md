@@ -7,9 +7,7 @@ OmniRoute adapter for Pi 0.80.10+ and OMP 17.0.5+.
 - Loads `/v1/models` before startup model resolution. Combos can be the default without hardcoding models in `models.json` or `models.yml`.
 - Uses each model's `capabilities.effort_tiers` when OmniRoute supplies it.
 - Otherwise exposes `low`, `medium`, `high`, `xhigh`, and `max`; override per model or combo in `omniroute.yml`.
-- Shows the requested combo and concrete routed model in the status line:
-  - OMP reads OmniRoute's streaming route trailer directly.
-  - Pi can query call logs when `OMNIROUTE_MANAGEMENT_TOKEN` is set.
+- OMP shows the requested combo and concrete routed model in its extension status line.
 - Logs a warning and lets the host continue when startup discovery fails.
 
 Shared OmniRoute logic lives in `src/shared.ts`. Host-specific behavior lives in `src/pi.ts` and `src/omp.ts`.
@@ -60,9 +58,6 @@ Environment settings can be exported in your shell or placed in the host agent d
 
 ```bash
 OMNIROUTE_STARTUP_TIMEOUT_MS='15000'
-
-# Pi only: enables resolved-combo status through management call logs:
-OMNIROUTE_MANAGEMENT_TOKEN='...'
 ```
 
 Reasoning-effort overrides live in `omniroute.yml` in that same agent directory—not in an environment variable:

@@ -217,8 +217,13 @@ export function resolvedRouteStatus(comboId: string, modelId: string): string {
 
 export function extractOmniRouteModel(rawLines: readonly string[]): string | undefined {
   for (const line of rawLines) {
-    const match = /^:\s*x-omniroute-model=(.+)$/i.exec(line.trim());
-    if (match?.[1]) return match[1].trim();
+    const trailer = /^:\s*x-omniroute-model=(.+)$/i.exec(line.trim());
+    if (trailer?.[1]) return trailer[1].trim();
+    if (!line.startsWith("data:")) continue;
+    try {
+      const payload = JSON.parse(line.slice(5).trim());
+      if (payload && typeof payload === "object" && typeof payload.model === "string") return payload.model.trim();
+    } catch {}
   }
   return undefined;
 }

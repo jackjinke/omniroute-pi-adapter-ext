@@ -35,13 +35,12 @@ class FakeOmpHost implements OmpExtensionAPI {
 
 interface FakeContext {
   hasUI: boolean;
-  model?: { id: string; name: string };
   statuses: Array<[string, string | undefined]>;
   ui: { setStatus(key: string, text: string | undefined): void };
 }
-function fakeContext(model?: { id: string; name: string }): FakeContext {
+function fakeContext(): FakeContext {
   const statuses: Array<[string, string | undefined]> = [];
-  return { hasUI: true, model, statuses, ui: { setStatus: (key, text) => statuses.push([key, text]) } };
+  return { hasUI: true, statuses, ui: { setStatus: (key, text) => statuses.push([key, text]) } };
 }
 
 class FakePiHost implements PiExtensionAPI {
@@ -136,12 +135,14 @@ describe("shared catalog logic", () => {
     expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow("Invalid OmniRoute config");
   });
 
-  test("extracts the concrete model from OmniRoute's SSE trailer", () => {
+  test("extracts the routed model from a live chunk or trailer", () => {
     expect(extractOmniRouteModel([
-      ": x-omniroute-cache-hit=false",
-      ": x-omniroute-model=gpt-5.6-sol",
+      'data: {"model":"vendor/live-model","choices":[]}',
+    ])).toBe("vendor/live-model");
+    expect(extractOmniRouteModel([
+      ": x-omniroute-model=vendor/trailer-model",
       "data: [DONE]",
-    ])).toBe("gpt-5.6-sol");
+    ])).toBe("vendor/trailer-model");
     expect(extractOmniRouteModel(["data: [DONE]"])).toBeUndefined();
   });
 
@@ -164,12 +165,12 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.api).toBe("omniroute-openai-completions");
     expect(host.provider?.config.models.map(model => model.id)).toEqual(["combo/coding"]);
   });
-  test("updates the native model display without adding route status text", async () => {
+  test("updates the supported status line from live routed-model chunks", async () => {
     const host = new FakeOmpHost();
     await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
       data: [{ id: "combo/custom", owned_by: "combo" }],
     }));
-    const context = fakeContext({ id: "combo/custom", name: "combo/custom" });
+    const context = fakeContext();
     host.emit("session_start", context);
 
     const stream = host.provider?.config.streamSimple;
@@ -180,7 +181,7 @@ describe("OMP adapter", () => {
       {
         apiKey: "secret",
         fetch: async () => new Response([
-          'data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"combo/custom","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}]}',
+          'data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"vendor/model-id","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}]}',
           "",
           ": x-omniroute-model=vendor/model-id",
           "",
@@ -191,9 +192,8 @@ describe("OMP adapter", () => {
     );
     if (events) for await (const _event of events) { /* consume the provider stream */ }
     await Bun.sleep(20);
-    expect((routedModel as { name: string }).name).toBe("combo/custom → vendor/model-id");
-    expect(context.model?.name).toBe("combo/custom → vendor/model-id");
-    expect(context.statuses.every(([, text]) => text === undefined)).toBeTrue();
+    expect(context.statuses).toContainEqual(["omniroute-route", "combo/custom → vendor/model-id"]);
+    expect((routedModel as { name: string }).name).toBe("combo/custom");
   });
 
   test("continues startup without registering when discovery fails", async () => {
