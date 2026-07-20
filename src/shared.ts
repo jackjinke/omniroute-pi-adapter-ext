@@ -46,7 +46,7 @@ function positiveInteger(value: string | undefined, fallback: number): number {
 
 function parseEfforts(value: unknown, label: string): string[] {
   if (!Array.isArray(value)) throw new Error(`${label} must be an array of reasoning efforts`);
-  const supported: Record<string, true> = { low: true, medium: true, high: true, xhigh: true, max: true };
+  const supported: Record<string, true> = { minimal: true, low: true, medium: true, high: true, xhigh: true, max: true };
   const efforts = value
     .filter((effort): effort is string => typeof effort === "string")
     .map(effort => effort.trim().toLowerCase())
@@ -114,7 +114,7 @@ function positiveNumber(value: unknown, fallback: number): number {
 
 function readCatalogEfforts(capabilities: object): string[] | undefined {
   if (!("effort_tiers" in capabilities) || !Array.isArray(capabilities.effort_tiers)) return undefined;
-  const supported: Record<string, true> = { low: true, medium: true, high: true, xhigh: true, max: true };
+  const supported: Record<string, true> = { minimal: true, low: true, medium: true, high: true, xhigh: true, max: true };
   const efforts = capabilities.effort_tiers
     .filter((effort): effort is string => typeof effort === "string")
     .map(effort => effort.trim().toLowerCase())

@@ -109,11 +109,11 @@ describe("shared catalog logic", () => {
     });
   });
 
-  test("excludes minimal from discovered and default effort levels", () => {
+  test("supports minimal when discovered but omits it from fallback defaults", () => {
     const discovered = normalizeCatalog({
       data: [{ id: "combo/coding", capabilities: { reasoning: true, effort_tiers: ["minimal", "low", "high"] } }],
     }, { effortOverrides: {} });
-    expect(discovered.models[0]?.thinking?.efforts).toEqual(["low", "high"]);
+    expect(discovered.models[0]?.thinking?.efforts).toEqual(["minimal", "low", "high"]);
     expect(normalizeCatalog({
       data: [{ id: "default", capabilities: { reasoning: true } }],
     }, { effortOverrides: {} }).models[0]?.thinking?.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
@@ -141,11 +141,11 @@ describe("shared catalog logic", () => {
   test("reads per-model efforts from YAML in the host config folder", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "omniroute-config-"));
     const configPath = join(agentDir, "omniroute.yml");
-    writeFileSync(configPath, 'combo/custom: [low, max]\n"*": [low, medium, high, xhigh]\n');
+    writeFileSync(configPath, 'combo/custom: [minimal, low, max]\n"*": [low, medium, high, xhigh]\n');
 
     expect(omniRouteConfigPath("omp", { PI_CODING_AGENT_DIR: agentDir })).toBe(configPath);
     expect(readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath).effortOverrides).toEqual({
-      "combo/custom": ["low", "max"],
+      "combo/custom": ["minimal", "low", "max"],
       "*": ["low", "medium", "high", "xhigh"],
     });
     expect(readConfig({ OMNIROUTE_API_KEY: "secret" }, join(agentDir, "missing.yml")).effortOverrides).toEqual({});
@@ -157,8 +157,6 @@ describe("shared catalog logic", () => {
     const agentDir = mkdtempSync(join(tmpdir(), "omniroute-invalid-config-"));
     const configPath = join(agentDir, "omniroute.yml");
     writeFileSync(configPath, "combo/custom: [ultra]\n");
-    expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow("Unsupported reasoning effort");
-    writeFileSync(configPath, "combo/custom: [minimal]\n");
     expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow("Unsupported reasoning effort");
     writeFileSync(configPath, "[broken");
     expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow("Invalid OmniRoute config");
