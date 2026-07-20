@@ -1,5 +1,5 @@
 import { streamOpenAICompletions, type OpenAICompletionsOptions } from "@oh-my-pi/pi-ai";
-import { extractOmniRouteModel, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
+import { extractOmniRouteModel, omniRouteConfigPath, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
 
 export interface OmpExtensionAPI {
   registerProvider(name: string, config: OmpProviderConfig): void;
@@ -64,7 +64,7 @@ export async function activateOmp(
   environment: Record<string, string | undefined> = process.env,
   fetcher: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = fetch,
 ): Promise<void> {
-  const discovery = await tryDiscoverModels(environment, fetcher);
+  const discovery = await tryDiscoverModels(environment, fetcher, omniRouteConfigPath("omp", environment));
   if (!discovery) return;
   const { config, catalog: { models, comboIds } } = discovery;
   api.registerProvider("omniroute", {

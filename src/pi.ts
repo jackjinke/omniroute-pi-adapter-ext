@@ -1,4 +1,4 @@
-import { tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
+import { omniRouteConfigPath, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
 
 export interface PiExtensionAPI {
   registerProvider(name: string, config: PiProviderConfig): void;
@@ -78,7 +78,7 @@ export async function activatePi(
   environment: Record<string, string | undefined> = process.env,
   fetcher: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = fetch,
 ): Promise<void> {
-  const discovery = await tryDiscoverModels(environment, fetcher);
+  const discovery = await tryDiscoverModels(environment, fetcher, omniRouteConfigPath("pi", environment));
   if (!discovery) return;
   const { config, catalog: { models, comboIds } } = discovery;
   const piModels = models.map(({ thinking: _thinking, ...model }) => model);

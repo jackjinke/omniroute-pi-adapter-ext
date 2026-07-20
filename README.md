@@ -6,7 +6,7 @@ OmniRoute adapter for Pi 0.80.10+ and OMP 17.0.5+.
 
 - Loads `/v1/models` before startup model resolution. Combos can be the default without hardcoding models in `models.json` or `models.yml`.
 - Uses each model's `capabilities.effort_tiers` when OmniRoute supplies it.
-- Otherwise exposes `low`, `medium`, `high`, and `xhigh`; override with `OMNIROUTE_REASONING_EFFORTS`.
+- Otherwise exposes `low`, `medium`, `high`, `xhigh`, and `max`; override per model or combo in `omniroute.yml`.
 - Shows the requested combo and concrete routed model in the status line:
   - OMP reads OmniRoute's streaming route trailer directly.
   - Pi can query call logs when `OMNIROUTE_MANAGEMENT_TOKEN` is set.
@@ -56,18 +56,23 @@ For persistent configuration, set your discovered `omniroute/<your-combo-id>` in
 
 ## Optional settings
 
-Set these in your shell or in the host agent directory's `.env` file: `~/.pi/agent/.env` for Pi and `~/.omp/agent/.env` for OMP (or the corresponding custom/profile agent directory).
+Environment settings can be exported in your shell or placed in the host agent directory's `.env` file: `~/.pi/agent/.env` for Pi and `~/.omp/agent/.env` for OMP (or the corresponding custom/profile agent directory).
 
 ```bash
-# Override specific model/combo IDs; `*` is the optional global fallback:
-OMNIROUTE_REASONING_EFFORTS='{"<model-or-combo-id>":["low","medium","high","max"],"*":["low","medium","high","xhigh"]}'
 OMNIROUTE_STARTUP_TIMEOUT_MS='15000'
 
 # Pi only: enables resolved-combo status through management call logs:
 OMNIROUTE_MANAGEMENT_TOKEN='...'
 ```
 
-Per-model overrides take precedence over `*`, then OmniRoute's `effort_tiers`, then the built-in `low,medium,high,xhigh` default.
+Reasoning-effort overrides live in `omniroute.yml` in that same agent directory—not in an environment variable:
+
+```yaml
+<model-or-combo-id>: [low, medium, high, max]
+"*": [low, medium, high, xhigh]
+```
+
+The exact model/combo entry takes precedence over `*`, then OmniRoute's `effort_tiers`, then the built-in `low,medium,high,xhigh,max` default.
 
 ## Development
 

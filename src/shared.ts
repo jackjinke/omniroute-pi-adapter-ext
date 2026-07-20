@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { parse } from "yaml";
+
 export const DEFAULT_BASE_URL = "http://127.0.0.1:20128";
-export const DEFAULT_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+export const DEFAULT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export interface OmniRouteModel {
   id: string;
@@ -52,30 +57,47 @@ function parseEfforts(value: unknown, label: string): string[] {
   return [...new Set(efforts)];
 }
 
-function readEffortOverrides(raw: string | undefined): Record<string, string[]> {
-  if (!raw?.trim()) return {};
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith("{")) return { "*": parseEfforts(trimmed.split(","), "OMNIROUTE_REASONING_EFFORTS") };
+function readEffortOverrides(path: string): Record<string, string[]> {
+  let source: string;
+  try {
+    source = readFileSync(path, "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return {};
+    throw error;
+  }
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(trimmed);
+    parsed = parse(source);
   } catch (error) {
-    throw new Error(`OMNIROUTE_REASONING_EFFORTS must be valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Invalid OmniRoute config at ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("OMNIROUTE_REASONING_EFFORTS must be a JSON object keyed by model ID");
+  if (parsed == null) return {};
+  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`OmniRoute config at ${path} must be a YAML object keyed by model ID`);
   }
   return Object.fromEntries(
-    Object.entries(parsed).map(([modelId, efforts]) => [modelId, parseEfforts(efforts, `OMNIROUTE_REASONING_EFFORTS[${modelId}]`)]),
+    Object.entries(parsed).map(([modelId, efforts]) => [modelId, parseEfforts(efforts, `${path}[${modelId}]`)]),
   );
 }
 
-export function readConfig(environment: Record<string, string | undefined> = process.env): OmniRouteConfig {
+export function omniRouteConfigPath(
+  host: "pi" | "omp",
+  environment: Record<string, string | undefined> = process.env,
+): string {
+  const agentDir = environment.PI_CODING_AGENT_DIR?.trim()
+    || join(environment.HOME?.trim() || homedir(), host === "omp" ? ".omp" : ".pi", "agent");
+  return join(agentDir, "omniroute.yml");
+}
+
+export function readConfig(
+  environment: Record<string, string | undefined> = process.env,
+  effortConfigPath?: string,
+): OmniRouteConfig {
   const apiKey = environment.OMNIROUTE_API_KEY?.trim();
   if (!apiKey) throw new Error("Missing OmniRoute API key in OMNIROUTE_API_KEY");
 
-  const effortOverrides = readEffortOverrides(environment.OMNIROUTE_REASONING_EFFORTS);
+  const effortOverrides = effortConfigPath ? readEffortOverrides(effortConfigPath) : {};
   return {
     baseUrl: (environment.OMNIROUTE_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, ""),
     apiKey,
@@ -185,9 +207,10 @@ export async function discoverModels(
 export async function tryDiscoverModels(
   environment: Record<string, string | undefined> = process.env,
   fetcher: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = fetch,
+  effortConfigPath?: string,
 ): Promise<{ config: OmniRouteConfig; catalog: OmniRouteCatalog } | undefined> {
   try {
-    const config = readConfig(environment);
+    const config = readConfig(environment, effortConfigPath);
     return { config, catalog: await discoverModels(config, fetcher) };
   } catch (error) {
     console.warn(`[omniroute] Startup model discovery skipped: ${error instanceof Error ? error.message : String(error)}`);

@@ -27,8 +27,17 @@
     "@oh-my-pi/pi-coding-agent": ">=17.0.5"
   },
   "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": { "optional": true },
-    "@oh-my-pi/pi-ai": { "optional": true },
-    "@oh-my-pi/pi-coding-agent": { "optional": true }
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@oh-my-pi/pi-ai": {
+      "optional": true
+    },
+    "@oh-my-pi/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
   }
 }

@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { activatePi, type PiExtensionAPI } from "../src/pi.ts";
 import { activateOmp, type OmpExtensionAPI } from "../src/omp.ts";
-import { extractOmniRouteModel, normalizeCatalog, readConfig } from "../src/shared.ts";
+import { extractOmniRouteModel, normalizeCatalog, omniRouteConfigPath, readConfig } from "../src/shared.ts";
 
 interface RegisteredProvider {
   baseUrl: string;
@@ -94,33 +97,31 @@ describe("shared catalog logic", () => {
     expect(discovered.models.map(model => model.thinking?.efforts)).toEqual([["low"], ["medium"]]);
     expect(normalizeCatalog({
       data: [{ id: "default", capabilities: { reasoning: true } }],
-    }, { effortOverrides: {} }).models[0]?.thinking?.efforts).toEqual(["low", "medium", "high", "xhigh"]);
+    }, { effortOverrides: {} }).models[0]?.thinking?.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
-  test("reads per-model and global effort overrides", () => {
-    const perModel = readConfig({
-      OMNIROUTE_API_KEY: "secret",
-      OMNIROUTE_REASONING_EFFORTS: '{"combo/custom":["low","max"]}',
+  test("reads per-model efforts from YAML in the host config folder", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-config-"));
+    const configPath = join(agentDir, "omniroute.yml");
+    writeFileSync(configPath, 'combo/custom: [low, max]\n"*": [low, medium, high, xhigh]\n');
+
+    expect(omniRouteConfigPath("omp", { PI_CODING_AGENT_DIR: agentDir })).toBe(configPath);
+    expect(readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath).effortOverrides).toEqual({
+      "combo/custom": ["low", "max"],
+      "*": ["low", "medium", "high", "xhigh"],
     });
-    expect(perModel.effortOverrides).toEqual({ "combo/custom": ["low", "max"] });
-    expect(readConfig({
-      OMNIROUTE_API_KEY: "secret",
-      OMNIROUTE_REASONING_EFFORTS: "low, medium, high, xhigh",
-    }).effortOverrides).toEqual({ "*": ["low", "medium", "high", "xhigh"] });
-    expect(readConfig({ OMNIROUTE_API_KEY: "secret" }).effortOverrides).toEqual({});
+    expect(readConfig({ OMNIROUTE_API_KEY: "secret" }, join(agentDir, "missing.yml")).effortOverrides).toEqual({});
   });
 
-  test("rejects invalid catalogs and effort overrides", () => {
+  test("rejects invalid catalogs and YAML effort overrides", () => {
     expect(() => normalizeCatalog({}, { effortOverrides: {} })).toThrow("data[]");
     expect(() => normalizeCatalog({ data: [] }, { effortOverrides: {} })).toThrow("no usable models");
-    expect(() => readConfig({
-      OMNIROUTE_API_KEY: "secret",
-      OMNIROUTE_REASONING_EFFORTS: '{"combo/custom":["ultra"]}',
-    })).toThrow("Unsupported reasoning effort");
-    expect(() => readConfig({
-      OMNIROUTE_API_KEY: "secret",
-      OMNIROUTE_REASONING_EFFORTS: "{broken",
-    })).toThrow("valid JSON");
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-invalid-config-"));
+    const configPath = join(agentDir, "omniroute.yml");
+    writeFileSync(configPath, "combo/custom: [ultra]\n");
+    expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow("Unsupported reasoning effort");
+    writeFileSync(configPath, "[broken");
+    expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow("Invalid OmniRoute config");
   });
 
   test("extracts the concrete model from OmniRoute's SSE trailer", () => {
