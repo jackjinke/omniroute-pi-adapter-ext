@@ -1,7 +1,7 @@
 {
   "name": "omniroute-pi-adapter-ext",
   "version": "0.1.0",
-  "description": "OmniRoute support for Pi and OMP",
+  "description": "OmniRoute adapter extension for Pi and OMP",
   "type": "module",
   "license": "MIT",
   "keywords": ["pi", "omp", "omniroute", "extension"],
