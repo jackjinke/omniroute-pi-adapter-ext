@@ -10,7 +10,7 @@ export interface OmniRouteModel {
   id: string;
   name: string;
   reasoning: boolean;
-  thinking?: { mode: "effort"; efforts: string[] };
+  thinking?: { mode: "effort"; efforts: string[]; effortMap: Record<string, string> };
   thinkingLevelMap?: Record<string, string | null>;
   input: ("text" | "image")[];
   supportsTools?: boolean;
@@ -18,6 +18,7 @@ export interface OmniRouteModel {
   contextWindow: number;
   maxTokens: number;
   compat: {
+    supportsReasoningParams: boolean;
     supportsReasoningEffort: boolean;
   };
 }
@@ -158,7 +159,7 @@ export function normalizeCatalog(
         128_000,
       ),
       maxTokens: positiveNumber("max_output_tokens" in entry ? entry.max_output_tokens : undefined, 16_384),
-      compat: { supportsReasoningEffort: reasoning },
+      compat: { supportsReasoningParams: reasoning, supportsReasoningEffort: reasoning },
     };
 
     if (reasoning) {
@@ -166,8 +167,9 @@ export function normalizeCatalog(
         ?? config.effortOverrides["*"]
         ?? readCatalogEfforts(capabilities)
         ?? [...DEFAULT_EFFORTS];
-      model.thinking = { mode: "effort", efforts };
-      model.thinkingLevelMap = Object.fromEntries(efforts.map(effort => [effort, effort]));
+      const effortMap = Object.fromEntries(efforts.map(effort => [effort, effort]));
+      model.thinking = { mode: "effort", efforts, effortMap };
+      model.thinkingLevelMap = effortMap;
     }
     models.push(model);
   }

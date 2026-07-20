@@ -198,6 +198,37 @@ describe("OMP adapter", () => {
     expect((routedModel as { name: string }).name).toBe("combo/custom");
   });
 
+  test("sends the selected reasoning effort to OmniRoute", async () => {
+    const host = new FakeOmpHost();
+    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+      data: [{
+        id: "combo/coding",
+        owned_by: "combo",
+        capabilities: { reasoning: true, effort_tiers: ["low", "medium", "high", "max"] },
+      }],
+    }));
+
+    let requestBody: Record<string, unknown> | undefined;
+    const stream = host.provider!.config.streamSimple!;
+    const model = {
+      ...host.provider!.config.models[0],
+      provider: "omniroute",
+      api: "omniroute-openai-completions",
+      baseUrl: "http://router.test/v1",
+    } as never;
+    const events = stream(model, { messages: [{ role: "user", content: "hello", timestamp: Date.now() }] } as never, {
+      apiKey: "secret",
+      reasoning: "max",
+      fetch: async (_input: string | URL | Request, init?: RequestInit) => {
+        requestBody = JSON.parse(String(init?.body));
+        return new Response("data: [DONE]\\n\\n", { headers: { "Content-Type": "text/event-stream" } });
+      },
+    });
+    for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(requestBody?.reasoning_effort).toBe("max");
+  });
+
   test("continues startup without registering when discovery fails", async () => {
     const host = new FakeOmpHost();
     await activateOmp(
