@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activatePi, type PiExtensionAPI } from "../src/pi.ts";
 import { activateOmp, type OmpExtensionAPI } from "../src/omp.ts";
-import { extractOmniRouteModel, normalizeCatalog, omniRouteConfigPath, readConfig, resolvedRouteStatus } from "../src/shared.ts";
+import { extractOmniRouteModel, normalizeCatalog, omniRouteConfigPath, readConfig } from "../src/shared.ts";
 
 interface RegisteredProvider {
   baseUrl: string;
@@ -33,16 +33,15 @@ class FakeOmpHost implements OmpExtensionAPI {
   }
 }
 
-
 interface FakeContext {
   hasUI: boolean;
+  model?: { id: string; name: string };
   statuses: Array<[string, string | undefined]>;
   ui: { setStatus(key: string, text: string | undefined): void };
 }
-
-function fakeContext(): FakeContext {
+function fakeContext(model?: { id: string; name: string }): FakeContext {
   const statuses: Array<[string, string | undefined]> = [];
-  return { hasUI: true, statuses, ui: { setStatus: (key, text) => statuses.push([key, text]) } };
+  return { hasUI: true, model, statuses, ui: { setStatus: (key, text) => statuses.push([key, text]) } };
 }
 
 class FakePiHost implements PiExtensionAPI {
@@ -146,9 +145,6 @@ describe("shared catalog logic", () => {
     expect(extractOmniRouteModel(["data: [DONE]"])).toBeUndefined();
   });
 
-  test("formats resolved combos using raw IDs", () => {
-    expect(resolvedRouteStatus("combo/my_combo", "vendor/model-id")).toBe("combo/my_combo → vendor/model-id");
-  });
 });
 
 describe("OMP adapter", () => {
@@ -168,18 +164,18 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.api).toBe("omniroute-openai-completions");
     expect(host.provider?.config.models.map(model => model.id)).toEqual(["combo/coding"]);
   });
-
-  test("updates combo route status as soon as the SSE trailer arrives", async () => {
+  test("updates the native model display without adding route status text", async () => {
     const host = new FakeOmpHost();
     await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
       data: [{ id: "combo/custom", owned_by: "combo" }],
     }));
-    const context = fakeContext();
+    const context = fakeContext({ id: "combo/custom", name: "combo/custom" });
     host.emit("session_start", context);
 
     const stream = host.provider?.config.streamSimple;
+    const routedModel = { ...host.provider!.config.models[0], provider: "omniroute", api: "omniroute-openai-completions", baseUrl: "http://router.test/v1" } as never;
     const events = stream?.(
-      { ...host.provider!.config.models[0], provider: "omniroute", api: "omniroute-openai-completions", baseUrl: "http://router.test/v1" } as never,
+      routedModel,
       { messages: [] } as never,
       {
         apiKey: "secret",
@@ -195,8 +191,9 @@ describe("OMP adapter", () => {
     );
     if (events) for await (const _event of events) { /* consume the provider stream */ }
     await Bun.sleep(20);
-
-    expect(context.statuses).toContainEqual(["omniroute-route", "combo/custom → vendor/model-id"]);
+    expect((routedModel as { name: string }).name).toBe("combo/custom → vendor/model-id");
+    expect(context.model?.name).toBe("combo/custom → vendor/model-id");
+    expect(context.statuses.every(([, text]) => text === undefined)).toBeTrue();
   });
 
   test("continues startup without registering when discovery fails", async () => {

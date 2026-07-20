@@ -7,7 +7,7 @@ export interface PiExtensionAPI {
 
 interface PiContext {
   hasUI: boolean;
-  model?: { id: string };
+  model?: { id: string; name: string };
   ui: {
     setStatus(key: string, text: string | undefined): void;
   };
@@ -69,7 +69,8 @@ function installPiRouteStatus(
     if (!response.ok) return;
     const row = callLogRows(await response.json()).find(candidate => candidate.requestedModel === combo);
     if (typeof row?.model !== "string" || row.model === combo) return;
-    if (context.hasUI) context.ui.setStatus("omniroute-route", resolvedRouteStatus(combo, row.model));
+    context.model.name = resolvedRouteStatus(combo, row.model);
+    if (context.hasUI) context.ui.setStatus("omniroute-route", undefined);
   });
 }
 
