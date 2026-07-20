@@ -23,21 +23,59 @@ interface OmpProviderConfig {
   models: OmniRouteModel[];
 }
 
+function observeRouteResponse(
+  response: Response,
+  requestedCombo: string,
+  updateStatus: (status: string) => void,
+): Response {
+  if (!response.body) return response;
+  const decoder = new TextDecoder();
+  let pending = "";
+  const inspect = (text: string) => {
+    pending += text;
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      const routedModel = extractOmniRouteModel([line]);
+      if (routedModel) updateStatus(resolvedRouteStatus(requestedCombo, routedModel));
+    }
+  };
+  const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      inspect(decoder.decode(chunk, { stream: true }));
+      controller.enqueue(chunk);
+    },
+    flush() {
+      inspect(decoder.decode() + "\n");
+    },
+  }));
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
 function createOmpRouteStream(api: OmpExtensionAPI, comboIds: Set<string>): typeof streamOpenAICompletions {
-  let resolvedRoute: { combo: string; model: string } | undefined;
+  let statusContext: OmpContext | undefined;
   let lastStatus: string | undefined;
 
-  const streamWithRouteStatus: typeof streamOpenAICompletions = (model, context, options) => {
+  api.on("message_update", (_event, context) => {
+    statusContext = context;
+  });
+  api.on("session_start", (_event, context) => {
+    statusContext = context;
+    if (lastStatus && context.hasUI) context.ui.setStatus("omniroute-route", lastStatus);
+  });
+
+  return (model, context, options) => {
     const requestedCombo = comboIds.has(model.id) ? model.id : undefined;
-    const callerObserver = options?.onSseEvent;
+    const callerFetch = options?.fetch ?? fetch;
+    const updateStatus = (status: string) => {
+      lastStatus = status;
+      if (statusContext?.hasUI) statusContext.ui.setStatus("omniroute-route", status);
+    };
     const wrappedOptions: OpenAICompletionsOptions = {
       ...options,
-      onSseEvent(event, responseModel) {
-        callerObserver?.(event, responseModel);
-        if (!requestedCombo) return;
-        const routedModel = extractOmniRouteModel(event.raw);
-        if (routedModel) resolvedRoute = { combo: requestedCombo, model: routedModel };
-      },
+      fetch: requestedCombo
+        ? async (input, init) => observeRouteResponse(await callerFetch(input, init), requestedCombo, updateStatus)
+        : callerFetch,
     };
     return streamOpenAICompletions(
       { ...model, api: "openai-completions", compat: { ...model.compat } },
@@ -45,18 +83,6 @@ function createOmpRouteStream(api: OmpExtensionAPI, comboIds: Set<string>): type
       wrappedOptions,
     );
   };
-
-  api.on("message_update", (_event, context) => {
-    if (!resolvedRoute) return;
-    lastStatus = resolvedRouteStatus(resolvedRoute.combo, resolvedRoute.model);
-    resolvedRoute = undefined;
-    if (context.hasUI) context.ui.setStatus("omniroute-route", lastStatus);
-  });
-  api.on("session_start", (_event, context) => {
-    if (lastStatus && context.hasUI) context.ui.setStatus("omniroute-route", lastStatus);
-  });
-
-  return streamWithRouteStatus;
 }
 
 export async function activateOmp(

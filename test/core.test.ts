@@ -10,7 +10,8 @@ interface RegisteredProvider {
   baseUrl: string;
   apiKey: string;
   api: string;
-  models: Array<{ id: string }>;
+  models: Array<{ id: string; name?: string }>;
+  streamSimple?: (...args: any[]) => AsyncIterable<unknown>;
 }
 
 class FakeOmpHost implements OmpExtensionAPI {
@@ -26,11 +27,22 @@ class FakeOmpHost implements OmpExtensionAPI {
     handlers.push(handler);
     this.handlers.set(event, handlers);
   }
+
+  emit(event: string, context: FakeContext): void {
+    for (const handler of this.handlers.get(event) ?? []) handler({}, context);
+  }
 }
+
 
 interface FakeContext {
   hasUI: boolean;
+  statuses: Array<[string, string | undefined]>;
   ui: { setStatus(key: string, text: string | undefined): void };
+}
+
+function fakeContext(): FakeContext {
+  const statuses: Array<[string, string | undefined]> = [];
+  return { hasUI: true, statuses, ui: { setStatus: (key, text) => statuses.push([key, text]) } };
 }
 
 class FakePiHost implements PiExtensionAPI {
@@ -155,6 +167,36 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.apiKey).toBe("secret");
     expect(host.provider?.config.api).toBe("omniroute-openai-completions");
     expect(host.provider?.config.models.map(model => model.id)).toEqual(["combo/coding"]);
+  });
+
+  test("updates combo route status as soon as the SSE trailer arrives", async () => {
+    const host = new FakeOmpHost();
+    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+      data: [{ id: "combo/custom", owned_by: "combo" }],
+    }));
+    const context = fakeContext();
+    host.emit("session_start", context);
+
+    const stream = host.provider?.config.streamSimple;
+    const events = stream?.(
+      { ...host.provider!.config.models[0], provider: "omniroute", api: "omniroute-openai-completions", baseUrl: "http://router.test/v1" } as never,
+      { messages: [] } as never,
+      {
+        apiKey: "secret",
+        fetch: async () => new Response([
+          'data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"combo/custom","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}]}',
+          "",
+          ": x-omniroute-model=vendor/model-id",
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"), { headers: { "Content-Type": "text/event-stream" } }),
+      },
+    );
+    if (events) for await (const _event of events) { /* consume the provider stream */ }
+    await Bun.sleep(20);
+
+    expect(context.statuses).toContainEqual(["omniroute-route", "combo/custom → vendor/model-id"]);
   });
 
   test("continues startup without registering when discovery fails", async () => {
