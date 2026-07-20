@@ -1,0 +1,6 @@
+setupVersion: 1
+modelRoles:
+  default: omniroute/combo/coding
+defaultThinkingLevel: max
+secrets:
+  enabled: false

@@ -1,0 +1,34 @@
+{
+  "name": "omniroute-pi-adapter-ext",
+  "version": "0.1.0",
+  "description": "Blocking OmniRoute discovery and routed-model status for Pi and OMP",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi", "omp", "omniroute", "extension"],
+  "files": ["src", "README.md", "LICENSE"],
+  "scripts": {
+    "test": "bun test",
+    "check": "bunx tsc --noEmit"
+  },
+  "pi": {
+    "extensions": ["./src/pi-entry.ts"]
+  },
+  "omp": {
+    "extensions": ["./src/index.ts"]
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-ai": "17.0.5",
+    "@types/bun": "^1.3.14",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.80.10",
+    "@oh-my-pi/pi-ai": ">=17.0.5",
+    "@oh-my-pi/pi-coding-agent": ">=17.0.5"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "@oh-my-pi/pi-ai": { "optional": true },
+    "@oh-my-pi/pi-coding-agent": { "optional": true }
+  }
+}
