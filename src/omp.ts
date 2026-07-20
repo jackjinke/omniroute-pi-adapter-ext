@@ -8,6 +8,7 @@ export interface OmpExtensionAPI {
 }
 
 interface OmpContext {
+  model?: { id: string; name: string };
   hasUI: boolean;
   ui: {
     setStatus(key: string, text: string | undefined): void;
@@ -53,25 +54,35 @@ function observeRouteResponse(
 }
 
 function createOmpRouteStream(api: OmpExtensionAPI, comboIds: Set<string>): typeof streamOpenAICompletions {
+  const routeNames = new Map<string, string>();
   let statusContext: OmpContext | undefined;
 
-  api.on("message_update", (_event, context) => {
-    statusContext = context;
-  });
   api.on("session_start", (_event, context) => {
     statusContext = context;
+    const model = context.model;
+    if (!model || !comboIds.has(model.id)) return;
+    const comboId = model.id;
+    Object.defineProperty(model, "name", {
+      configurable: true,
+      enumerable: true,
+      get: () => routeNames.get(comboId) ?? comboId,
+      set: () => {},
+    });
   });
 
   return (model, context, options) => {
     const requestedCombo = comboIds.has(model.id) ? model.id : undefined;
     const callerFetch = options?.fetch ?? fetch;
-    const updateStatus = (status: string) => {
-      if (statusContext?.hasUI) statusContext.ui.setStatus("omniroute-route", status);
+    if (requestedCombo) routeNames.delete(requestedCombo);
+    const updateRoute = (status: string) => {
+      if (!requestedCombo) return;
+      routeNames.set(requestedCombo, status);
+      statusContext?.ui.setStatus("omniroute-route", undefined);
     };
     const wrappedOptions: OpenAICompletionsOptions = {
       ...options,
       fetch: requestedCombo
-        ? async (input, init) => observeRouteResponse(await callerFetch(input, init), requestedCombo, updateStatus)
+        ? async (input, init) => observeRouteResponse(await callerFetch(input, init), requestedCombo, updateRoute)
         : callerFetch,
     };
     return streamOpenAICompletions(
