@@ -1,7 +1,7 @@
 {
   "name": "omniroute-pi-adapter-ext",
   "version": "0.1.0",
-  "description": "Blocking OmniRoute discovery and routed-model status for Pi and OMP",
+  "description": "OmniRoute support for Pi and OMP",
   "type": "module",
   "license": "MIT",
   "keywords": ["pi", "omp", "omniroute", "extension"],
