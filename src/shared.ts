@@ -20,6 +20,8 @@ export interface OmniRouteModel {
   compat: {
     supportsReasoningParams: boolean;
     supportsReasoningEffort: boolean;
+    /** Maps OmniRoute `structured_output` onto the host's strict-tools/grammar surface. */
+    supportsStrictMode: boolean;
   };
 }
 
@@ -121,6 +123,25 @@ function readCatalogEfforts(capabilities: object): string[] | undefined {
   return efforts.length > 0 ? [...new Set(efforts)] : undefined;
 }
 
+// The host Model type models only "text" | "image" input; richer OmniRoute
+// modalities (audio, video, pdf) have no host representation and are dropped.
+function readInputModalities(entry: object, capabilities: object): ("text" | "image")[] {
+  const raw = "input_modalities" in entry && Array.isArray(entry.input_modalities)
+    ? entry.input_modalities
+    : undefined;
+  const fromArray = raw?.some(m => typeof m === "string" && m.trim().toLowerCase() === "image") === true;
+  const fromCaps = ("vision" in capabilities && capabilities.vision === true)
+    || ("image_input" in capabilities && capabilities.image_input === true);
+  return fromArray || fromCaps ? ["text", "image"] : ["text"];
+}
+
+function readStructuredOutput(capabilities: object): boolean {
+  return ("structured_output" in capabilities && capabilities.structured_output === true)
+    || ("structured_outputs" in capabilities && capabilities.structured_outputs === true)
+    || ("json_mode" in capabilities && capabilities.json_mode === true)
+    || ("json_schema" in capabilities && capabilities.json_schema === true);
+}
+
 export function normalizeCatalog(
   payload: unknown,
   config: Pick<OmniRouteConfig, "effortOverrides">,
@@ -140,23 +161,26 @@ export function normalizeCatalog(
       : {};
     const reasoning = !("reasoning" in capabilities && capabilities.reasoning === false)
       && !("thinking" in capabilities && capabilities.thinking === false);
+    const structuredOutput = readStructuredOutput(capabilities);
 
     const model: OmniRouteModel = {
       id,
       name: id,
       reasoning,
-      input: ("vision" in capabilities && capabilities.vision === true)
-        || ("image_input" in capabilities && capabilities.image_input === true)
-        ? ["text", "image"]
-        : ["text"],
+      input: readInputModalities(entry, capabilities),
       supportsTools: !("tool_calling" in capabilities) || capabilities.tool_calling !== false,
+      // OmniRoute's /v1/models exposes no pricing data; cost is intentionally zeroed.
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: positiveNumber(
         "context_length" in entry ? entry.context_length : "max_input_tokens" in entry ? entry.max_input_tokens : undefined,
         128_000,
       ),
       maxTokens: positiveNumber("max_output_tokens" in entry ? entry.max_output_tokens : undefined, 16_384),
-      compat: { supportsReasoningParams: reasoning, supportsReasoningEffort: reasoning },
+      compat: {
+        supportsReasoningParams: reasoning,
+        supportsReasoningEffort: reasoning,
+        supportsStrictMode: structuredOutput,
+      },
     };
 
     if (reasoning) {

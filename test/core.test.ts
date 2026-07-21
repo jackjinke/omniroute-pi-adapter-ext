@@ -132,6 +132,31 @@ describe("shared catalog logic", () => {
     });
   });
 
+  test("maps input_modalities and structured_output from the live catalog shape", () => {
+    const result = normalizeCatalog({
+      data: [
+        // Live shape: top-level input_modalities array, vision absent.
+        { id: "modal/vision", input_modalities: ["text", "image"], capabilities: { reasoning: true } },
+        // Richer modalities collapse to the host's text|image vocabulary.
+        { id: "modal/rich", input_modalities: ["text", "image", "audio", "video", "pdf"] },
+        // Text-only stays text-only.
+        { id: "modal/text", input_modalities: ["text"], capabilities: { vision: false } },
+        // Structured output boolean drives the strict-mode compat flag.
+        { id: "so/true", capabilities: { structured_output: true } },
+        { id: "so/false", capabilities: { structured_output: false } },
+      ],
+    }, { effortOverrides: {} });
+
+    expect(result.models.map(m => m.input)).toEqual([
+      ["text", "image"],
+      ["text", "image"],
+      ["text"],
+      ["text"],
+      ["text"],
+    ]);
+    expect(result.models.map(m => m.compat.supportsStrictMode)).toEqual([false, false, false, true, false]);
+  });
+
   test("honors explicit non-reasoning capability metadata", () => {
     const result = normalizeCatalog({
       data: [{ id: "plain/model", capabilities: { reasoning: false } }],
