@@ -28,7 +28,7 @@ interface OmpProviderConfig {
 
 function observeRouteResponse(
   response: Response,
-  requestedCombo: string,
+  requestedModel: string,
   updateModelName: (name: string) => void,
 ): Response {
   if (!response.body) return response;
@@ -40,7 +40,7 @@ function observeRouteResponse(
     pending = lines.pop() ?? "";
     for (const line of lines) {
       const routedModel = extractOmniRouteModel([line]);
-      if (routedModel) updateModelName(resolvedRouteStatus(requestedCombo, routedModel));
+      if (routedModel) updateModelName(resolvedRouteStatus(requestedModel, routedModel));
     }
   };
   const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
@@ -55,51 +55,51 @@ function observeRouteResponse(
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
-function withComboReasoningEffort(
+function withReasoningEffort(
   payload: unknown,
-  comboIds: Set<string>,
+  modelIds: Set<string>,
   reasoning: ReasoningEffort | undefined,
 ): unknown {
   if (!reasoning || !payload || typeof payload !== "object") return payload;
   const body = payload as Record<string, unknown>;
-  if (typeof body.model !== "string" || !comboIds.has(body.model)) return payload;
+  if (typeof body.model !== "string" || !modelIds.has(body.model)) return payload;
   if (body.reasoning_effort !== undefined || body.reasoning !== undefined) return payload;
   body.reasoning_effort = reasoning;
   return payload;
 }
 
-function createOmpRouteStream(api: OmpExtensionAPI, comboIds: Set<string>): typeof streamOpenAICompletions {
+function createOmpRouteStream(api: OmpExtensionAPI, modelIds: Set<string>): typeof streamOpenAICompletions {
   const routeNames = new Map<string, string>();
   let statusContext: OmpContext | undefined;
 
   api.on("session_start", (_event, context) => {
     statusContext = context;
     const model = context.model;
-    if (!model || !comboIds.has(model.id)) return;
-    const comboId = model.id;
+    if (!model || !modelIds.has(model.id)) return;
+    const modelId = model.id;
     Object.defineProperty(model, "name", {
       configurable: true,
       enumerable: true,
-      get: () => routeNames.get(comboId) ?? comboId,
+      get: () => routeNames.get(modelId) ?? modelId,
       set: () => {},
     });
   });
 
   return (model, context, options) => {
-    const requestedCombo = comboIds.has(model.id) ? model.id : undefined;
+    const requestedModel = modelIds.has(model.id) ? model.id : undefined;
     const callerFetch = options?.fetch ?? fetch;
-    if (requestedCombo) routeNames.delete(requestedCombo);
+    if (requestedModel) routeNames.delete(requestedModel);
     const updateRoute = (status: string) => {
-      if (!requestedCombo) return;
-      routeNames.set(requestedCombo, status);
+      if (!requestedModel) return;
+      routeNames.set(requestedModel, status);
       statusContext?.ui.setStatus("omniroute-route", undefined);
     };
     const simpleOptions = options as OpenAICompletionsOptions & { reasoning?: ReasoningEffort };
     const wrappedOptions: OpenAICompletionsOptions = {
       ...simpleOptions,
       reasoning: simpleOptions.reasoning ?? api.getThinkingLevel(),
-      fetch: requestedCombo
-        ? async (input, init) => observeRouteResponse(await callerFetch(input, init), requestedCombo, updateRoute)
+      fetch: requestedModel
+        ? async (input, init) => observeRouteResponse(await callerFetch(input, init), requestedModel, updateRoute)
         : callerFetch,
     };
     return streamOpenAICompletions(
@@ -117,10 +117,11 @@ export async function activateOmp(
 ): Promise<void> {
   const discovery = await tryDiscoverModels(environment, fetcher, omniRouteConfigPath("omp", environment));
   if (!discovery) return;
-  const { config, catalog: { models, comboIds } } = discovery;
-  api.on("before_provider_request", event => withComboReasoningEffort(
+  const { config, catalog: { models } } = discovery;
+  const modelIds = new Set(models.map(model => model.id));
+  api.on("before_provider_request", event => withReasoningEffort(
     event.payload,
-    comboIds,
+    modelIds,
     api.getThinkingLevel(),
   ));
   api.registerProvider("omniroute", {
@@ -128,7 +129,7 @@ export async function activateOmp(
     baseUrl: `${config.baseUrl}/v1`,
     apiKey: config.apiKey,
     api: "omniroute-openai-completions",
-    streamSimple: createOmpRouteStream(api, comboIds),
+    streamSimple: createOmpRouteStream(api, modelIds),
     models,
   });
 }

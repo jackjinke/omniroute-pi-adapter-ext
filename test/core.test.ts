@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { activatePi, type PiExtensionAPI } from "../src/pi.ts";
 import { activateOmp, type OmpExtensionAPI } from "../src/omp.ts";
-import { extractOmniRouteModel, normalizeCatalog, omniRouteConfigPath, readConfig } from "../src/shared.ts";
+import { extractOmniRouteModel, normalizeCatalog, omniRouteConfigPath, readConfig, resolvedRouteStatus } from "../src/shared.ts";
 
 interface RegisteredProvider {
   baseUrl: string;
@@ -76,11 +76,10 @@ class FakePiHost implements PiExtensionAPI {
 }
 
 describe("shared catalog logic", () => {
-  test("preserves combo metadata and configured effort levels", () => {
+  test("preserves discovered metadata and configured effort levels", () => {
     const result = normalizeCatalog({
       data: [{
         id: "combo/coding",
-        owned_by: "combo",
         context_length: 200000,
         max_output_tokens: 64000,
         capabilities: {
@@ -95,7 +94,6 @@ describe("shared catalog logic", () => {
       effortOverrides: { "combo/coding": ["low", "medium", "high", "max"] },
     });
 
-    expect(result.comboIds.has("combo/coding")).toBeTrue();
     expect(result.models[0]).toMatchObject({
       id: "combo/coding",
       name: "combo/coding",
@@ -117,6 +115,30 @@ describe("shared catalog logic", () => {
     expect(normalizeCatalog({
       data: [{ id: "default", capabilities: { reasoning: true } }],
     }, { effortOverrides: {} }).models[0]?.thinking?.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  test("exposes fallback effort controls without capability or owner metadata", () => {
+    const result = normalizeCatalog({
+      data: [{ id: "any/model" }],
+    }, { effortOverrides: {} });
+
+    expect(result.models[0]).toMatchObject({
+      id: "any/model",
+      reasoning: true,
+      thinking: {
+        mode: "effort",
+        efforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    });
+  });
+
+  test("honors explicit non-reasoning capability metadata", () => {
+    const result = normalizeCatalog({
+      data: [{ id: "plain/model", capabilities: { reasoning: false } }],
+    }, { effortOverrides: {} });
+
+    expect(result.models[0]).toMatchObject({ id: "plain/model", reasoning: false });
+    expect(result.models[0]?.thinking).toBeUndefined();
   });
 
   test("applies exact, wildcard, catalog, then default effort precedence", () => {
@@ -173,6 +195,11 @@ describe("shared catalog logic", () => {
     expect(extractOmniRouteModel(["data: [DONE]"])).toBeUndefined();
   });
 
+  test("only distinguishes routed models when the response model differs", () => {
+    expect(resolvedRouteStatus("direct/model", "direct/model")).toBe("direct/model");
+    expect(resolvedRouteStatus("requested/model", "routed/model")).toBe("requested/model → routed/model");
+  });
+
 });
 
 describe("OMP adapter", () => {
@@ -182,7 +209,7 @@ describe("OMP adapter", () => {
       host,
       { OMNIROUTE_API_KEY: "secret", OMNIROUTE_BASE_URL: "http://router.test" },
       async () => Response.json({
-        data: [{ id: "combo/coding", owned_by: "combo", capabilities: { reasoning: true } }],
+        data: [{ id: "any/model", capabilities: { reasoning: true } }],
       }),
     );
 
@@ -190,14 +217,14 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.baseUrl).toBe("http://router.test/v1");
     expect(host.provider?.config.apiKey).toBe("secret");
     expect(host.provider?.config.api).toBe("omniroute-openai-completions");
-    expect(host.provider?.config.models.map(model => model.id)).toEqual(["combo/coding"]);
+    expect(host.provider?.config.models.map(model => model.id)).toEqual(["any/model"]);
   });
-  test("updates the native model segment without adding a floating status row", async () => {
+  test("updates the native model segment for every discovered model", async () => {
     const host = new FakeOmpHost();
     await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
-      data: [{ id: "combo/custom", owned_by: "combo" }],
+      data: [{ id: "direct/custom" }],
     }));
-    const context = fakeContext({ id: "combo/custom", name: "combo/custom" });
+    const context = fakeContext({ id: "direct/custom", name: "direct/custom" });
     host.emit("session_start", context);
 
     const stream = host.provider?.config.streamSimple;
@@ -219,9 +246,9 @@ describe("OMP adapter", () => {
     );
     if (events) for await (const _event of events) { /* consume the provider stream */ }
     await Bun.sleep(20);
-    expect(context.model?.name).toBe("combo/custom → vendor/model-id");
+    expect(context.model?.name).toBe("direct/custom → vendor/model-id");
     expect(context.statuses.every(([, text]) => text === undefined)).toBeTrue();
-    expect((routedModel as { name: string }).name).toBe("combo/custom");
+    expect((routedModel as { name: string }).name).toBe("direct/custom");
   });
 
   test("sends the selected reasoning effort to OmniRoute", async () => {
@@ -229,7 +256,6 @@ describe("OMP adapter", () => {
     await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
       data: [{
         id: "combo/coding",
-        owned_by: "combo",
         capabilities: { reasoning: true, effort_tiers: ["low", "medium", "high", "max"] },
       }],
     }));
@@ -259,7 +285,7 @@ describe("OMP adapter", () => {
     const host = new FakeOmpHost();
     host.thinkingLevel = "high";
     await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
-      data: [{ id: "combo/coding", owned_by: "combo", capabilities: { reasoning: true } }],
+      data: [{ id: "any/model", capabilities: { reasoning: true } }],
     }));
 
     let requestBody: Record<string, unknown> | undefined;
@@ -283,24 +309,24 @@ describe("OMP adapter", () => {
     expect(requestBody?.reasoning_effort).toBe("high");
   });
 
-  test("injects the live effort into combo payloads after provider shaping", async () => {
+  test("injects the live effort into every discovered model payload after provider shaping", async () => {
     const host = new FakeOmpHost();
     host.thinkingLevel = "xhigh";
     await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
       data: [
-        { id: "combo/coding", owned_by: "combo", capabilities: { reasoning: true } },
-        { id: "direct/model", owned_by: "provider", capabilities: { reasoning: true } },
+        { id: "first/model" },
+        { id: "second/model", capabilities: { reasoning: false } },
       ],
     }));
-    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+    const context = fakeContext({ id: "first/model", name: "first/model" });
 
-    expect(await host.emitBeforeProviderRequest({ model: "combo/coding", messages: [] }, context)).toMatchObject({
-      model: "combo/coding",
+    expect(await host.emitBeforeProviderRequest({ model: "first/model", messages: [] }, context)).toMatchObject({
+      model: "first/model",
       reasoning_effort: "xhigh",
     });
-    expect(await host.emitBeforeProviderRequest({ model: "direct/model", messages: [] }, context)).toEqual({
-      model: "direct/model",
-      messages: [],
+    expect(await host.emitBeforeProviderRequest({ model: "second/model", messages: [] }, context)).toMatchObject({
+      model: "second/model",
+      reasoning_effort: "xhigh",
     });
   });
 
@@ -324,7 +350,6 @@ describe("Pi adapter", () => {
       async () => Response.json({
         data: [{
           id: "combo/coding",
-          owned_by: "combo",
           capabilities: { reasoning: true, effort_tiers: ["low", "medium", "high", "max"] },
         }],
       }),

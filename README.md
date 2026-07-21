@@ -4,10 +4,10 @@ OmniRoute adapter for Pi 0.80.10+ and OMP 17.0.5+.
 
 ## Supported
 
-- Loads `/v1/models` before startup model resolution. Combos can be the default without hardcoding models in `models.json` or `models.yml`.
-- Uses each model's `capabilities.effort_tiers` when OmniRoute supplies it.
-- Otherwise exposes `low`, `medium`, `high`, `xhigh`, and `max`; override per model or combo in `omniroute.yml`.
-- OMP shows the requested combo and concrete routed model in its extension status line.
+- Loads every `/v1/models` entry before startup model resolution without classifying entries by owner or ID convention.
+- Uses each entry's `capabilities.effort_tiers` when OmniRoute supplies it.
+- Otherwise exposes `low`, `medium`, `high`, `xhigh`, and `max`; override per entry in `omniroute.yml`.
+- OMP shows the requested and routed model IDs only when they differ.
 - Logs a warning and lets the host continue when startup discovery fails.
 
 Shared OmniRoute logic lives in `src/shared.ts`. Host-specific behavior lives in `src/pi.ts` and `src/omp.ts`.
@@ -43,14 +43,14 @@ export OMNIROUTE_API_KEY='...'
 export OMNIROUTE_BASE_URL='http://your-omniroute-host:20128'
 ```
 
-Choose any combo returned by your OmniRoute instance:
+Choose any entry returned by your OmniRoute instance:
 
 ```bash
-pi --model omniroute/<your-combo-id>
-omp --model omniroute/<your-combo-id>
+pi --model omniroute/<model-id>
+omp --model omniroute/<model-id>
 ```
 
-For persistent configuration, set your discovered `omniroute/<your-combo-id>` in the host's normal model settings. Do not add a hardcoded OmniRoute model list.
+For persistent configuration, set the discovered `omniroute/<model-id>` in the host's normal model settings. Do not add a hardcoded OmniRoute model list.
 
 ## Optional settings
 
@@ -63,11 +63,11 @@ OMNIROUTE_STARTUP_TIMEOUT_MS='15000'
 Reasoning-effort overrides live in `omniroute.yml` in that same agent directory—not in an environment variable:
 
 ```yaml
-<model-or-combo-id>: [low, medium, high, max]
+<model-id>: [low, medium, high, max]
 "*": [low, medium, high, xhigh]
 ```
 
-The exact model/combo entry takes precedence over `*`, then OmniRoute's `effort_tiers`, then the built-in `low,medium,high,xhigh,max` default.
+The exact entry takes precedence over `*`, then OmniRoute's `effort_tiers`, then the built-in `low,medium,high,xhigh,max` default.
 
 ## Development
 

@@ -25,7 +25,6 @@ export interface OmniRouteModel {
 
 export interface OmniRouteCatalog {
   models: OmniRouteModel[];
-  comboIds: Set<string>;
 }
 
 export interface OmniRouteConfig {
@@ -131,7 +130,6 @@ export function normalizeCatalog(
     throw new Error("OmniRoute /v1/models response is missing data[]");
   }
 
-  const comboIds = new Set<string>();
   const models: OmniRouteModel[] = [];
   for (const entry of payload.data) {
     if (!entry || typeof entry !== "object") continue;
@@ -140,9 +138,8 @@ export function normalizeCatalog(
     const capabilities = "capabilities" in entry && entry.capabilities && typeof entry.capabilities === "object"
       ? entry.capabilities
       : {};
-    const reasoning = ("reasoning" in capabilities && capabilities.reasoning === true)
-      || ("thinking" in capabilities && capabilities.thinking === true);
-    if ("owned_by" in entry && entry.owned_by === "combo") comboIds.add(id);
+    const reasoning = !("reasoning" in capabilities && capabilities.reasoning === false)
+      && !("thinking" in capabilities && capabilities.thinking === false);
 
     const model: OmniRouteModel = {
       id,
@@ -175,7 +172,7 @@ export function normalizeCatalog(
   }
 
   if (models.length === 0) throw new Error("OmniRoute /v1/models returned no usable models");
-  return { models, comboIds };
+  return { models };
 }
 
 export async function discoverModels(
@@ -213,8 +210,9 @@ export async function tryDiscoverModels(
   }
 }
 
-export function resolvedRouteStatus(comboId: string, modelId: string): string {
-  return `${comboId} → ${modelId}`;
+export function resolvedRouteStatus(requestedModel: string, routedModel: string): string {
+  return requestedModel === routedModel ? requestedModel : `${requestedModel} → ${routedModel}`;
+
 }
 
 export function extractOmniRouteModel(rawLines: readonly string[]): string | undefined {
