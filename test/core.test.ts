@@ -219,12 +219,12 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.api).toBe("omniroute-openai-completions");
     expect(host.provider?.config.models.map(model => model.id)).toEqual(["any/model"]);
   });
-  test("updates the native model segment for every discovered model", async () => {
+  test("clears a resolved combo without final routing metadata and accepts a later resolution", async () => {
     const host = new FakeOmpHost();
     await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
-      data: [{ id: "direct/custom" }],
+      data: [{ id: "combo/coding" }],
     }));
-    const context = fakeContext({ id: "direct/custom", name: "direct/custom" });
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
     host.emit("session_start", context);
 
     const stream = host.provider?.config.streamSimple;
@@ -245,10 +245,61 @@ describe("OMP adapter", () => {
       },
     );
     if (events) for await (const _event of events) { /* consume the provider stream */ }
-    await Bun.sleep(20);
-    expect(context.model?.name).toBe("direct/custom → vendor/model-id");
+    expect(context.model?.name).toBe("combo/coding → vendor/model-id");
     expect(context.statuses.every(([, text]) => text === undefined)).toBeTrue();
-    expect((routedModel as { name: string }).name).toBe("direct/custom");
+
+    const unresolvedEvents = stream?.(
+      routedModel,
+      { messages: [] } as never,
+      {
+        apiKey: "secret",
+        fetch: async () => new Response("data: [DONE]\n\n", { headers: { "Content-Type": "text/event-stream" } }),
+      },
+    );
+    if (unresolvedEvents) for await (const _event of unresolvedEvents) { /* consume the provider stream */ }
+    expect(context.model?.name).toBe("combo/coding");
+
+    const reroutedEvents = stream?.(
+      routedModel,
+      { messages: [] } as never,
+      {
+        apiKey: "secret",
+        fetch: async () => new Response(": x-omniroute-model=vendor/different-model\n\ndata: [DONE]\n\n", {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      },
+    );
+    if (reroutedEvents) for await (const _event of reroutedEvents) { /* consume the provider stream */ }
+    expect(context.model?.name).toBe("combo/coding → vendor/different-model");
+  });
+
+  test("keeps a direct model label plain when no routing occurs", async () => {
+    const host = new FakeOmpHost();
+    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+      data: [{ id: "direct/model" }],
+    }));
+    const context = fakeContext({ id: "direct/model", name: "direct/model" });
+    host.emit("session_start", context);
+
+    const model = {
+      ...host.provider!.config.models[0],
+      provider: "omniroute",
+      api: "omniroute-openai-completions",
+      baseUrl: "http://router.test/v1",
+    } as never;
+    const events = host.provider?.config.streamSimple?.(
+      model,
+      { messages: [] } as never,
+      {
+        apiKey: "secret",
+        fetch: async () => new Response(": x-omniroute-model=direct/model\n\ndata: [DONE]\n\n", {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      },
+    );
+    if (events) for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(context.model?.name).toBe("direct/model");
   });
 
   test("sends the selected reasoning effort to OmniRoute", async () => {

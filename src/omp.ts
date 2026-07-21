@@ -29,18 +29,25 @@ interface OmpProviderConfig {
 function observeRouteResponse(
   response: Response,
   requestedModel: string,
-  updateModelName: (name: string) => void,
+  updateModelName: (name: string | undefined) => void,
 ): Response {
-  if (!response.body) return response;
+  if (!response.body) {
+    updateModelName(undefined);
+    return response;
+  }
   const decoder = new TextDecoder();
   let pending = "";
+  let foundRoute = false;
   const inspect = (text: string) => {
     pending += text;
     const lines = pending.split(/\r?\n/);
     pending = lines.pop() ?? "";
     for (const line of lines) {
       const routedModel = extractOmniRouteModel([line]);
-      if (routedModel) updateModelName(resolvedRouteStatus(requestedModel, routedModel));
+      if (routedModel) {
+        foundRoute = true;
+        updateModelName(resolvedRouteStatus(requestedModel, routedModel));
+      }
     }
   };
   const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
@@ -50,6 +57,7 @@ function observeRouteResponse(
     },
     flush() {
       inspect(decoder.decode() + "\n");
+      if (!foundRoute) updateModelName(undefined);
     },
   }));
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
@@ -88,10 +96,11 @@ function createOmpRouteStream(api: OmpExtensionAPI, modelIds: Set<string>): type
   return (model, context, options) => {
     const requestedModel = modelIds.has(model.id) ? model.id : undefined;
     const callerFetch = options?.fetch ?? fetch;
-    if (requestedModel) routeNames.delete(requestedModel);
-    const updateRoute = (status: string) => {
+    if (requestedModel && !requestedModel.startsWith("combo/")) routeNames.delete(requestedModel);
+    const updateRoute = (status: string | undefined) => {
       if (!requestedModel) return;
-      routeNames.set(requestedModel, status);
+      if (status === undefined) routeNames.delete(requestedModel);
+      else routeNames.set(requestedModel, status);
       statusContext?.ui.setStatus("omniroute-route", undefined);
     };
     const simpleOptions = options as OpenAICompletionsOptions & { reasoning?: ReasoningEffort };
