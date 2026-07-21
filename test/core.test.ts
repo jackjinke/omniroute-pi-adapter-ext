@@ -219,7 +219,7 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.api).toBe("omniroute-openai-completions");
     expect(host.provider?.config.models.map(model => model.id)).toEqual(["any/model"]);
   });
-  test("clears a resolved combo without final routing metadata and accepts a later resolution", async () => {
+  test("keeps a resolved combo without later routing metadata and accepts a new resolution", async () => {
     const host = new FakeOmpHost();
     await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
       data: [{ id: "combo/coding" }],
@@ -257,7 +257,7 @@ describe("OMP adapter", () => {
       },
     );
     if (unresolvedEvents) for await (const _event of unresolvedEvents) { /* consume the provider stream */ }
-    expect(context.model?.name).toBe("combo/coding");
+    expect(context.model?.name).toBe("combo/coding → vendor/model-id");
 
     const reroutedEvents = stream?.(
       routedModel,
