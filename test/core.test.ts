@@ -198,6 +198,21 @@ describe("shared catalog logic", () => {
     expect(readConfig({ OMNIROUTE_API_KEY: "secret" }, join(agentDir, "missing.yml")).effortOverrides).toEqual({});
   });
 
+  test("reads the API format from YAML, defaulting to chat_completions", () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-format-"));
+    const configPath = join(agentDir, "omniroute.yml");
+
+    expect(readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath).format).toBe("chat_completions");
+
+    writeFileSync(configPath, "format: responses\ncombo/custom: [low, high]\n");
+    const config = readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath);
+    expect(config.format).toBe("responses");
+    expect(config.effortOverrides).toEqual({ "combo/custom": ["low", "high"] });
+
+    writeFileSync(configPath, "format: completions\n");
+    expect(() => readConfig({ OMNIROUTE_API_KEY: "secret" }, configPath)).toThrow('"chat_completions" or "responses"');
+  });
+
   test("rejects invalid catalogs and YAML effort overrides", () => {
     expect(() => normalizeCatalog({}, { effortOverrides: {} })).toThrow("data[]");
     expect(() => normalizeCatalog({ data: [] }, { effortOverrides: {} })).toThrow("no usable models");
@@ -415,6 +430,43 @@ describe("OMP adapter", () => {
     );
     expect(host.provider).toBeUndefined();
   });
+
+  test("uses the responses API when the config sets format: responses", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-format-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakeOmpHost();
+    host.thinkingLevel = "high";
+    await activateOmp(
+      host,
+      { OMNIROUTE_API_KEY: "secret", PI_CODING_AGENT_DIR: agentDir },
+      async () => Response.json({ data: [{ id: "combo/coding", capabilities: { reasoning: true } }] }),
+    );
+
+    expect(host.provider?.config.api).toBe("omniroute-openai-responses");
+
+    let requestUrl: string | undefined;
+    let requestBody: Record<string, unknown> | undefined;
+    const model = {
+      ...host.provider!.config.models[0],
+      provider: "omniroute",
+      api: "omniroute-openai-responses",
+      baseUrl: "http://router.test/v1",
+    } as never;
+    const events = host.provider!.config.streamSimple!(model, {
+      messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+    } as never, {
+      apiKey: "secret",
+      fetch: async (input: string | URL | Request, init?: RequestInit) => {
+        requestUrl = String(input);
+        requestBody = JSON.parse(String(init?.body));
+        return new Response("data: [DONE]\n\n", { headers: { "Content-Type": "text/event-stream" } });
+      },
+    });
+    for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(requestUrl).toBe("http://router.test/v1/responses");
+    expect((requestBody?.reasoning as Record<string, unknown> | undefined)?.effort).toBe("high");
+  });
 });
 
 describe("Pi adapter", () => {
@@ -436,5 +488,18 @@ describe("Pi adapter", () => {
       id: "combo/coding",
       thinkingLevelMap: { low: "low", medium: "medium", high: "high", max: "max" },
     });
+  });
+
+  test("registers the responses API when the config sets format: responses", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-pi-format-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakePiHost();
+    await activatePi(
+      host,
+      { OMNIROUTE_API_KEY: "secret", PI_CODING_AGENT_DIR: agentDir },
+      async () => Response.json({ data: [{ id: "combo/coding" }] }),
+    );
+
+    expect(host.provider?.config.api).toBe("openai-responses");
   });
 });

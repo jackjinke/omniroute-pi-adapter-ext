@@ -60,14 +60,18 @@ Environment settings can be exported in your shell or placed in the host agent d
 OMNIROUTE_STARTUP_TIMEOUT_MS='15000'
 ```
 
-Reasoning-effort overrides live in `omniroute.yml` in that same agent directory—not in an environment variable:
+Reasoning-effort overrides and the wire format live in `omniroute.yml` in that same agent directory—not in an environment variable:
 
 ```yaml
+format: responses # chat_completions (default) or responses
 <model-id>: [low, medium, high, max]
 "*": [low, medium, high, xhigh]
 ```
 
+
 The exact entry takes precedence over `*`, then OmniRoute's `effort_tiers`, then the built-in `low,medium,high,xhigh,max` default.
+
+With `format: responses` the adapter speaks the OpenAI Responses API (`/v1/responses`) instead of chat completions, on both Pi and OMP. Omit `format` (or set `chat_completions`) to keep the default behavior.
 
 ## Development
 
