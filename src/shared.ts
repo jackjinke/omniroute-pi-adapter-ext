@@ -29,13 +29,10 @@ export interface OmniRouteCatalog {
   models: OmniRouteModel[];
 }
 
-export type OmniRouteApiFormat = "chat_completions" | "responses";
-
 export interface OmniRouteConfig {
   baseUrl: string;
   apiKey: string;
   timeoutMs: number;
-  format: OmniRouteApiFormat;
   effortOverrides: Record<string, string[]>;
 }
 
@@ -46,12 +43,6 @@ function positiveInteger(value: string | undefined, fallback: number): number {
     throw new Error(`OMNIROUTE_STARTUP_TIMEOUT_MS must be a positive integer, got ${value}`);
   }
   return parsed;
-}
-
-function parseFormat(value: unknown, label: string): OmniRouteApiFormat {
-  if (value === undefined || value === null) return "chat_completions";
-  if (value === "chat_completions" || value === "responses") return value;
-  throw new Error(`${label} must be "chat_completions" or "responses", got ${JSON.stringify(value)}`);
 }
 
 function parseEfforts(value: unknown, label: string): string[] {
@@ -68,14 +59,12 @@ function parseEfforts(value: unknown, label: string): string[] {
   return [...new Set(efforts)];
 }
 
-function readYamlConfig(path: string): { format: OmniRouteApiFormat; effortOverrides: Record<string, string[]> } {
+function readEffortOverrides(path: string): Record<string, string[]> {
   let source: string;
   try {
     source = readFileSync(path, "utf8");
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return { format: "chat_completions", effortOverrides: {} };
-    }
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return {};
     throw error;
   }
 
@@ -85,19 +74,14 @@ function readYamlConfig(path: string): { format: OmniRouteApiFormat; effortOverr
   } catch (error) {
     throw new Error(`Invalid OmniRoute config at ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (parsed == null) return { format: "chat_completions", effortOverrides: {} };
+  if (parsed == null) return {};
   if (typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`OmniRoute config at ${path} must be a YAML object keyed by model ID`);
   }
-  const { format, ...modelEfforts } = parsed as Record<string, unknown>;
-  return {
-    format: parseFormat(format, `${path}[format]`),
-    effortOverrides: Object.fromEntries(
-      Object.entries(modelEfforts).map(([modelId, efforts]) => [modelId, parseEfforts(efforts, `${path}[${modelId}]`)]),
-    ),
-  };
+  return Object.fromEntries(
+    Object.entries(parsed).map(([modelId, efforts]) => [modelId, parseEfforts(efforts, `${path}[${modelId}]`)]),
+  );
 }
-
 
 export function omniRouteConfigPath(
   host: "pi" | "omp",
@@ -115,14 +99,11 @@ export function readConfig(
   const apiKey = environment.OMNIROUTE_API_KEY?.trim();
   if (!apiKey) throw new Error("Missing OmniRoute API key in OMNIROUTE_API_KEY");
 
-  const { format, effortOverrides } = effortConfigPath
-    ? readYamlConfig(effortConfigPath)
-    : { format: "chat_completions" as const, effortOverrides: {} };
+  const effortOverrides = effortConfigPath ? readEffortOverrides(effortConfigPath) : {};
   return {
     baseUrl: (environment.OMNIROUTE_BASE_URL?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, ""),
     apiKey,
     timeoutMs: positiveInteger(environment.OMNIROUTE_STARTUP_TIMEOUT_MS, 15_000),
-    format,
     effortOverrides,
   };
 }
