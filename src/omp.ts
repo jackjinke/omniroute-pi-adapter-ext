@@ -1,4 +1,5 @@
 import { streamOpenAICompletions, streamOpenAIResponses, type Model, type OpenAICompletionsOptions, type OpenAIResponsesOptions, type StreamFunction } from "@oh-my-pi/pi-ai";
+import { buildOpenAICompat, buildOpenAIResponsesCompat } from "@oh-my-pi/pi-catalog";
 import { extractOmniRouteModel, omniRouteConfigPath, resolvedRouteStatus, tryDiscoverModels, type OmniRouteApiFormat, type OmniRouteModel } from "./shared.ts";
 
 type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -55,24 +56,38 @@ function observeRouteResponse(
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
+// OMP rebuilds registered models through pi-catalog's buildModel; unknown
+// custom api strings resolve `compat` to undefined, so re-resolve the full
+// OpenAI compat record ourselves before handing the model to the stream fns.
+function resolveModelCompat(
+  format: OmniRouteApiFormat,
+  model: OmniRouteModel,
+  baseUrl: string,
+): Record<string, unknown> {
+  const spec = { ...model, provider: "omniroute", baseUrl: `${baseUrl}/v1` };
+  return (format === "responses"
+    ? buildOpenAIResponsesCompat(spec as never)
+    : buildOpenAICompat(spec as never)) as unknown as Record<string, unknown>;
+}
+
 interface OmpStreamEntry {
   api: "omniroute-openai-completions" | "omniroute-openai-responses";
-  run(model: unknown, context: unknown, options: Record<string, unknown>): unknown;
+  run(model: unknown, context: unknown, options: Record<string, unknown>, compat: Record<string, unknown>): unknown;
 }
 
 const OMP_STREAMS: Record<OmniRouteApiFormat, OmpStreamEntry> = {
   chat_completions: {
     api: "omniroute-openai-completions",
-    run: (model, context, options) => (streamOpenAICompletions as StreamFunction<"openai-completions">)(
-      { ...(model as Record<string, unknown>), api: "openai-completions" } as unknown as Model<"openai-completions">,
+    run: (model, context, options, compat) => (streamOpenAICompletions as StreamFunction<"openai-completions">)(
+      { ...(model as Record<string, unknown>), api: "openai-completions", compat } as unknown as Model<"openai-completions">,
       context as never,
       options as OpenAICompletionsOptions,
     ),
   },
   responses: {
     api: "omniroute-openai-responses",
-    run: (model, context, options) => (streamOpenAIResponses as StreamFunction<"openai-responses">)(
-      { ...(model as Record<string, unknown>), api: "openai-responses" } as unknown as Model<"openai-responses">,
+    run: (model, context, options, compat) => (streamOpenAIResponses as StreamFunction<"openai-responses">)(
+      { ...(model as Record<string, unknown>), api: "openai-responses", compat } as unknown as Model<"openai-responses">,
       context as never,
       options as OpenAIResponsesOptions,
     ),
@@ -92,7 +107,12 @@ function withReasoningEffort(
   return payload;
 }
 
-function createOmpRouteStream(api: OmpExtensionAPI, modelIds: Set<string>, format: OmniRouteApiFormat): typeof streamOpenAICompletions {
+function createOmpRouteStream(
+  api: OmpExtensionAPI,
+  modelIds: Set<string>,
+  format: OmniRouteApiFormat,
+  modelCompats: Map<string, Record<string, unknown>>,
+): typeof streamOpenAICompletions {
   const routeNames = new Map<string, string>();
   let statusContext: OmpContext | undefined;
 
@@ -127,7 +147,10 @@ function createOmpRouteStream(api: OmpExtensionAPI, modelIds: Set<string>, forma
           observeRouteResponse(await callerFetch(input, init), requestedModel, updateRoute)
         : callerFetch,
     };
-    return OMP_STREAMS[format].run(model, context, wrappedOptions) as never;
+    const compat = modelCompats.get(model.id)
+      ?? (model as unknown as { compat?: Record<string, unknown> }).compat
+      ?? {};
+    return OMP_STREAMS[format].run(model, context, wrappedOptions, compat) as never;
   };
 }
 
@@ -140,6 +163,9 @@ export async function activateOmp(
   if (!discovery) return;
   const { config, catalog: { models } } = discovery;
   const modelIds = new Set(models.map(model => model.id));
+  const modelCompats = new Map(
+    models.map(model => [model.id, resolveModelCompat(config.format, model, config.baseUrl)]),
+  );
   api.on("before_provider_request", event => withReasoningEffort(
     event.payload,
     modelIds,
@@ -150,7 +176,7 @@ export async function activateOmp(
     baseUrl: `${config.baseUrl}/v1`,
     apiKey: config.apiKey,
     api: OMP_STREAMS[config.format].api,
-    streamSimple: createOmpRouteStream(api, modelIds, config.format),
+    streamSimple: createOmpRouteStream(api, modelIds, config.format, modelCompats),
     models,
   });
 }
