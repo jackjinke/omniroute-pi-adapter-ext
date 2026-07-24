@@ -1,5 +1,5 @@
 import { streamOpenAICompletions, type OpenAICompletionsOptions } from "@oh-my-pi/pi-ai";
-import { extractOmniRouteModel, omniRouteConfigPath, resolvedRouteStatus, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
+import { extractOmniRouteModel, omniRouteConfigPath, resolvedRouteStatus, tryDiscoverModels, type OmniRouteApiFormat, type OmniRouteModel } from "./shared.ts";
 
 type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -21,8 +21,8 @@ interface OmpProviderConfig {
   name: string;
   baseUrl: string;
   apiKey: string;
-  api: "omniroute-openai-completions";
-  streamSimple: typeof streamOpenAICompletions;
+  api: "omniroute-openai-completions" | "openai-responses";
+  streamSimple?: typeof streamOpenAICompletions;
   models: OmniRouteModel[];
 }
 
@@ -59,12 +59,17 @@ function withReasoningEffort(
   payload: unknown,
   modelIds: Set<string>,
   reasoning: ReasoningEffort | undefined,
+  format: OmniRouteApiFormat,
 ): unknown {
   if (!reasoning || !payload || typeof payload !== "object") return payload;
   const body = payload as Record<string, unknown>;
   if (typeof body.model !== "string" || !modelIds.has(body.model)) return payload;
   if (body.reasoning_effort !== undefined || body.reasoning !== undefined) return payload;
-  body.reasoning_effort = reasoning;
+  if (format === "responses") {
+    body.reasoning = { effort: reasoning };
+  } else {
+    body.reasoning_effort = reasoning;
+  }
   return payload;
 }
 
@@ -123,13 +128,14 @@ export async function activateOmp(
     event.payload,
     modelIds,
     api.getThinkingLevel(),
+    config.format,
   ));
   api.registerProvider("omniroute", {
     name: "OmniRoute",
     baseUrl: `${config.baseUrl}/v1`,
     apiKey: config.apiKey,
-    api: "omniroute-openai-completions",
-    streamSimple: createOmpRouteStream(api, modelIds),
+    api: config.format === "responses" ? "openai-responses" : "omniroute-openai-completions",
+    ...(config.format === "chat_completions" ? { streamSimple: createOmpRouteStream(api, modelIds) } : {}),
     models,
   });
 }

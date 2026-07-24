@@ -1,4 +1,4 @@
-import { omniRouteConfigPath, tryDiscoverModels, type OmniRouteModel } from "./shared.ts";
+import { omniRouteConfigPath, tryDiscoverModels, type OmniRouteApiFormat, type OmniRouteModel } from "./shared.ts";
 
 export interface PiExtensionAPI {
   registerProvider(name: string, config: PiProviderConfig): void;
@@ -10,12 +10,17 @@ interface PiProviderConfig {
   name: string;
   baseUrl: string;
   apiKey: string;
-  api: "openai-completions";
+  api: "openai-completions" | "openai-responses";
   models: PiProviderModel[];
 }
 
 interface PiProviderModel extends Omit<OmniRouteModel, "thinking"> {}
 
+
+const PI_API_FORMAT: Record<OmniRouteApiFormat, PiProviderConfig["api"]> = {
+  chat_completions: "openai-completions",
+  responses: "openai-responses",
+};
 
 export async function activatePi(
   api: PiExtensionAPI,
@@ -30,7 +35,7 @@ export async function activatePi(
     name: "OmniRoute",
     baseUrl: `${config.baseUrl}/v1`,
     apiKey: config.apiKey,
-    api: "openai-completions",
+    api: PI_API_FORMAT[config.format],
     models: piModels,
   });
 }
