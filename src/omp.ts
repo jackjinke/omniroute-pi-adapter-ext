@@ -83,7 +83,10 @@ function createOmpRouteStream(
   return (model, context, options) => {
     const requestedModel = modelIds.has(model.id) ? model.id : undefined;
     const callerFetch = options?.fetch ?? fetch;
-    if (requestedModel && !requestedModel.startsWith("combo/")) routeNames.delete(requestedModel);
+    if (requestedModel && !requestedModel.startsWith("combo/")) {
+      routeNames.delete(requestedModel);
+      if (statusContext?.model?.id === requestedModel) statusContext.ui.setStatus("omniroute-route", undefined);
+    }
     const simpleOptions = options as OpenAICompletionsOptions & { reasoning?: ReasoningEffort };
     const wrappedOptions: OpenAICompletionsOptions = {
       ...simpleOptions,
@@ -94,8 +97,15 @@ function createOmpRouteStream(
         if (!requestedModel) return;
         const routedModel = extractOmniRouteModel(lines);
         if (!routedModel) return;
-        routeNames.set(requestedModel, resolvedRouteStatus(requestedModel, routedModel));
-        statusContext?.ui.setStatus("omniroute-route", undefined);
+        const status = resolvedRouteStatus(requestedModel, routedModel);
+        routeNames.set(requestedModel, status);
+        // Current OMP footer renders model.id, while older hosts used model.name.
+        // Publish through extension status API for current OMP; keep the getter
+        // above for older hosts. Match active model id so title/auto side requests
+        // cannot overwrite main session route status.
+        if (statusContext?.model?.id === requestedModel) {
+          statusContext.ui.setStatus("omniroute-route", status);
+        }
       }),
     };
     const providerModel = { ...model, api: PROVIDER_API_BY_FORMAT[format], compat: { ...model.compat } };

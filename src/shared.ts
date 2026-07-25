@@ -265,13 +265,13 @@ export function resolvedRouteStatus(requestedModel: string, routedModel: string)
  */
 const KEEPALIVE_CHAT_ID = "omniroute-keepalive";
 const KEEPALIVE_RESPONSES_ITEM_ID = "rs_omniroute_keepalive";
-const KEEPALIVE_MODEL = "omniroute";
 
 export function isOmniRouteKeepalivePayload(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") return false;
   const record = payload as Record<string, unknown>;
-  if (record.id === KEEPALIVE_CHAT_ID || record.model === KEEPALIVE_MODEL) return true;
-  if (record.item_id === KEEPALIVE_RESPONSES_ITEM_ID) return true;
+  // Match stable synthetic identifiers only. Do not drop actual provider output
+  // merely because an upstream happens to use model name "omniroute".
+  if (record.id === KEEPALIVE_CHAT_ID || record.item_id === KEEPALIVE_RESPONSES_ITEM_ID) return true;
   const item = record.item;
   return !!item
     && typeof item === "object"

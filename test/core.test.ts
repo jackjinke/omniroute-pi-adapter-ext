@@ -268,6 +268,9 @@ describe("shared catalog logic", () => {
     expect(extractOmniRouteModel([CHAT_KEEPALIVE_FRAME])).toBeUndefined();
     expect(extractOmniRouteModel(RESPONSES_KEEPALIVE_FRAME.split("\n"))).toBeUndefined();
     expect(extractOmniRouteModel([
+      'data: {"id":"provider-chunk","object":"chat.completion.chunk","model":"omniroute","choices":[{"index":0,"delta":{"reasoning_content":"actual provider reasoning"}}]}',
+    ])).toBe("omniroute");
+    expect(extractOmniRouteModel([
       'data: {"id":"omniroute-keepalive","object":"chat.completion.chunk","model":"omniroute","choices":[{"index":0,"delta":{}}]}',
     ])).toBeUndefined();
   });
@@ -329,7 +332,7 @@ describe("OMP adapter", () => {
     );
     if (events) for await (const _event of events) { /* consume the provider stream */ }
     expect(context.model?.name).toBe("combo/coding → vendor/model-id");
-    expect(context.statuses.every(([, text]) => text === undefined)).toBeTrue();
+    expect(context.statuses).toContainEqual(["omniroute-route", "combo/coding → vendor/model-id"]);
 
     const unresolvedEvents = stream?.(
       routedModel,
@@ -423,6 +426,7 @@ describe("OMP adapter", () => {
 
     await streamFor("cheap/titler", "vendor/tiny-model");
     expect(context.model?.name).toBe("combo/coding → vendor/main-model");
+    expect(context.statuses).toContainEqual(["omniroute-route", "combo/coding → vendor/main-model"]);
   });
 
   test("keeps a direct model label plain when no routing occurs", async () => {
@@ -591,6 +595,78 @@ describe("OMP adapter", () => {
     for await (const _event of events) { /* consume the provider stream */ }
 
     expect(context.model?.name).toBe("combo/coding → vendor/model-id");
+    expect(context.statuses).toContainEqual(["omniroute-route", "combo/coding → vendor/model-id"]);
+  });
+
+  test("keeps updated route when Responses reports model only on completion", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-model-change-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }), async () => Response.json({
+      data: [{ id: "combo/coding" }],
+    }));
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+    host.emit("session_start", context);
+    const model = {
+      ...host.provider!.config.models[0],
+      provider: "omniroute",
+      api: "omniroute-openai-responses",
+      baseUrl: "http://router.test/v1",
+    } as never;
+    const events = host.provider!.config.streamSimple!(model, { messages: [] } as never, {
+      apiKey: "secret",
+      fetch: async () => new Response([
+        'event: response.created',
+        'data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}',
+        "",
+        'event: response.completed',
+        'data: {"type":"response.completed","response":{"id":"resp_1","model":"openai/gpt-5.2","status":"completed"}}',
+        "",
+      ].join("\n"), { headers: { "Content-Type": "text/event-stream" } }),
+    });
+    for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(context.model?.name).toBe("combo/coding → openai/gpt-5.2");
+  });
+
+  test("keeps Responses route from final OmniRoute metadata trailer", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-trailer-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }), async () => Response.json({ data: [{ id: "combo/coding" }] }));
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+    host.emit("session_start", context);
+    const model = { ...host.provider!.config.models[0], provider: "omniroute", api: "omniroute-openai-responses", baseUrl: "http://router.test/v1" } as never;
+    const events = host.provider!.config.streamSimple!(model, { messages: [] } as never, {
+      apiKey: "secret",
+      fetch: async () => new Response([
+        'event: response.completed',
+        'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}',
+        "",
+        ": x-omniroute-model=openai/gpt-5.2",
+        "",
+      ].join("\n"), { headers: { "Content-Type": "text/event-stream" } }),
+    });
+    for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(context.model?.name).toBe("combo/coding → openai/gpt-5.2");
+  });
+
+  test("publishes active combo route through OMP status API", async () => {
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv(), async () => Response.json({ data: [{ id: "combo/coding" }] }));
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+    host.emit("session_start", context);
+    const model = { ...host.provider!.config.models[0], provider: "omniroute", api: "omniroute-openai-completions", baseUrl: "http://router.test/v1" } as never;
+    const events = host.provider!.config.streamSimple!(model, { messages: [] } as never, {
+      apiKey: "secret",
+      fetch: async () => new Response(': x-omniroute-model=openai/gpt-5.2\n\ndata: [DONE]\n\n', {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    });
+    for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(context.statuses).toContainEqual(["omniroute-route", "combo/coding → openai/gpt-5.2"]);
   });
 });
 
