@@ -85,6 +85,14 @@ function createOmpRouteStream(
     const requestedModel = modelIds.has(model.id) ? model.id : undefined;
     const callerFetch = options?.fetch ?? fetch;
     if (requestedModel && !comboIds.has(requestedModel)) routeNames.delete(requestedModel);
+    const updateRouteName = (routedModel: string) => {
+      const status = resolvedRouteStatus(requestedModel!, routedModel);
+      routeNames.set(requestedModel!, status);
+      // Name getter drives OMP's native model segment. Clear one extension-status
+      // repaint hook without adding a floating status row; side requests remain
+      // isolated because only their own routeNames entry changes.
+      statusContext?.ui.setStatus("omniroute-route", undefined);
+    };
     const simpleOptions = options as OpenAICompletionsOptions & {
       reasoning?: ReasoningEffort;
       reasoningSummary?: "auto" | "detailed" | "concise" | null;
@@ -105,17 +113,18 @@ function createOmpRouteStream(
             ? null
             : "auto"
         : simpleOptions.reasoningSummary,
-      fetch: async (input: string | URL | Request, init?: RequestInit) => stripKeepaliveFrames(await callerFetch(input, init), lines => {
-        if (!requestedModel) return;
-        const routedModel = extractOmniRouteModel(lines);
-        if (!routedModel) return;
-        const status = resolvedRouteStatus(requestedModel, routedModel);
-        routeNames.set(requestedModel, status);
-        // Name getter drives OMP's native model segment. Clear one extension-status
-        // repaint hook without adding a floating status row; side requests remain
-        // isolated because only their own routeNames entry changes.
-        statusContext?.ui.setStatus("omniroute-route", undefined);
-      }),
+      fetch: async (input: string | URL | Request, init?: RequestInit) => {
+        const response = await callerFetch(input, init);
+        if (requestedModel) {
+          const routedModel = response.headers.get("x-omniroute-model")?.trim();
+          if (routedModel) updateRouteName(routedModel);
+        }
+        return stripKeepaliveFrames(response, lines => {
+          if (!requestedModel) return;
+          const routedModel = extractOmniRouteModel(lines);
+          if (routedModel) updateRouteName(routedModel);
+        });
+      },
     };
     const providerModel = { ...model, api: PROVIDER_API_BY_FORMAT[format], compat: { ...model.compat } };
     return format === "responses"

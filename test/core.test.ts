@@ -734,6 +734,40 @@ describe("OMP adapter", () => {
 
     expect(context.model?.name).toBe("combo/coding → openai/gpt-5.2");
   });
+  test("uses response model header and keeps sticky combo route", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-header-route-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }), async () => Response.json({
+      data: [{ id: "combo/coding", owned_by: "combo" }],
+    }));
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+    host.emit("session_start", context);
+    const model = { ...host.provider!.config.models[0], provider: "omniroute", api: "omniroute-openai-responses", baseUrl: "http://router.test/v1" } as never;
+    let requestCount = 0;
+    const fetchResponse = async () => {
+      requestCount++;
+      return new Response([
+        'event: response.completed',
+        'data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}',
+        "",
+      ].join("\n"), {
+        headers: {
+          "Content-Type": "text/event-stream",
+          ...(requestCount === 1 ? { "X-OmniRoute-Model": "vendor/model-from-header" } : {}),
+        },
+      });
+    };
+    for (let i = 0; i < 2; i++) {
+      const events = host.provider!.config.streamSimple!(model, { messages: [] } as never, {
+        apiKey: "secret",
+        fetch: fetchResponse,
+      });
+      for await (const _event of events) { /* consume the provider stream */ }
+    }
+
+    expect(context.model?.name).toBe("combo/coding → vendor/model-from-header");
+  });
 
 });
 
