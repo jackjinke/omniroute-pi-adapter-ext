@@ -62,6 +62,7 @@ interface OmpProviderConfig {
 function createOmpRouteStream(
   api: OmpExtensionAPI,
   modelIds: Set<string>,
+  comboIds: Set<string>,
   format: OmniRouteApiFormat,
 ): typeof streamOpenAICompletions {
   const routeNames = new Map<string, string>();
@@ -83,10 +84,7 @@ function createOmpRouteStream(
   return (model, context, options) => {
     const requestedModel = modelIds.has(model.id) ? model.id : undefined;
     const callerFetch = options?.fetch ?? fetch;
-    if (requestedModel && !requestedModel.startsWith("combo/")) {
-      routeNames.delete(requestedModel);
-      if (statusContext?.model?.id === requestedModel) statusContext.ui.setStatus("omniroute-route", undefined);
-    }
+    if (requestedModel && !comboIds.has(requestedModel)) routeNames.delete(requestedModel);
     const simpleOptions = options as OpenAICompletionsOptions & { reasoning?: ReasoningEffort };
     const wrappedOptions: OpenAICompletionsOptions = {
       ...simpleOptions,
@@ -99,13 +97,10 @@ function createOmpRouteStream(
         if (!routedModel) return;
         const status = resolvedRouteStatus(requestedModel, routedModel);
         routeNames.set(requestedModel, status);
-        // Current OMP footer renders model.id, while older hosts used model.name.
-        // Publish through extension status API for current OMP; keep the getter
-        // above for older hosts. Match active model id so title/auto side requests
-        // cannot overwrite main session route status.
-        if (statusContext?.model?.id === requestedModel) {
-          statusContext.ui.setStatus("omniroute-route", status);
-        }
+        // Name getter drives OMP's native model segment. Clear one extension-status
+        // repaint hook without adding a floating status row; side requests remain
+        // isolated because only their own routeNames entry changes.
+        statusContext?.ui.setStatus("omniroute-route", undefined);
       }),
     };
     const providerModel = { ...model, api: PROVIDER_API_BY_FORMAT[format], compat: { ...model.compat } };
@@ -143,6 +138,7 @@ export async function activateOmp(
   if (!discovery) return;
   const { config, catalog: { models } } = discovery;
   const modelIds = new Set(models.map(model => model.id));
+  const comboIds = new Set(models.filter(model => model.isCombo).map(model => model.id));
   api.on("before_provider_request", event => withReasoningEffort(
     event.payload,
     modelIds,
@@ -154,7 +150,7 @@ export async function activateOmp(
     baseUrl: `${config.baseUrl}/v1`,
     apiKey: config.apiKey,
     api: HOST_API_BY_FORMAT[config.format],
-    streamSimple: createOmpRouteStream(api, modelIds, config.format),
+    streamSimple: createOmpRouteStream(api, modelIds, comboIds, config.format),
     models,
   });
 }

@@ -9,6 +9,8 @@ export const DEFAULT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as cons
 export interface OmniRouteModel {
   id: string;
   name: string;
+  /** Explicit `/v1/models` ownership; model-id prefixes are user-defined and unreliable. */
+  isCombo: boolean;
   reasoning: boolean;
   thinking?: { mode: "effort"; efforts: string[]; effortMap: Record<string, string> };
   thinkingLevelMap?: Record<string, string | null>;
@@ -172,6 +174,9 @@ export function normalizeCatalog(
   const models: OmniRouteModel[] = [];
   for (const entry of payload.data) {
     if (!entry || typeof entry !== "object") continue;
+    const isCombo = "owned_by" in entry
+      && typeof entry.owned_by === "string"
+      && entry.owned_by.trim().toLowerCase() === "combo";
     if (!("id" in entry) || typeof entry.id !== "string" || !entry.id.trim()) continue;
     const id = entry.id.trim();
     const capabilities = "capabilities" in entry && entry.capabilities && typeof entry.capabilities === "object"
@@ -180,10 +185,10 @@ export function normalizeCatalog(
     const reasoning = !("reasoning" in capabilities && capabilities.reasoning === false)
       && !("thinking" in capabilities && capabilities.thinking === false);
     const structuredOutput = readStructuredOutput(capabilities);
-
     const model: OmniRouteModel = {
       id,
       name: id,
+      isCombo,
       reasoning,
       input: readInputModalities(entry, capabilities),
       supportsTools: !("tool_calling" in capabilities) || capabilities.tool_calling !== false,
