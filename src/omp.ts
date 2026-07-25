@@ -88,10 +88,11 @@ function createOmpRouteStream(
     const updateRouteName = (routedModel: string) => {
       const status = resolvedRouteStatus(requestedModel!, routedModel);
       routeNames.set(requestedModel!, status);
-      // Name getter drives OMP's native model segment. Clear one extension-status
-      // repaint hook without adding a floating status row; side requests remain
-      // isolated because only their own routeNames entry changes.
-      statusContext?.ui.setStatus("omniroute-route", undefined);
+      // OMP's native footer renders model.id, not model.name. Publish routed
+      // status only for active session model; side requests keep mapping isolated.
+      const activeContext = statusContext;
+      if (!activeContext || activeContext.model?.id !== requestedModel) return;
+      activeContext.ui.setStatus("omniroute-route", status);
     };
     const simpleOptions = options as OpenAICompletionsOptions & {
       reasoning?: ReasoningEffort;

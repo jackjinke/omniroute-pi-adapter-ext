@@ -333,7 +333,7 @@ describe("OMP adapter", () => {
     );
     if (events) for await (const _event of events) { /* consume the provider stream */ }
     expect(context.model?.name).toBe("combo/coding → vendor/model-id");
-    expect(context.statuses.every(([, text]) => text === undefined)).toBeTrue();
+    expect(context.statuses.at(-1)).toEqual(["omniroute-route", "combo/coding → vendor/model-id"]);
 
     const unresolvedEvents = stream?.(
       routedModel,
@@ -345,6 +345,7 @@ describe("OMP adapter", () => {
     );
     if (unresolvedEvents) for await (const _event of unresolvedEvents) { /* consume the provider stream */ }
     expect(context.model?.name).toBe("combo/coding → vendor/model-id");
+    expect(context.statuses.at(-1)).toEqual(["omniroute-route", "combo/coding → vendor/model-id"]);
 
     const reroutedEvents = stream?.(
       routedModel,
@@ -358,6 +359,7 @@ describe("OMP adapter", () => {
     );
     if (reroutedEvents) for await (const _event of reroutedEvents) { /* consume the provider stream */ }
     expect(context.model?.name).toBe("combo/coding → vendor/different-model");
+    expect(context.statuses.at(-1)).toEqual(["omniroute-route", "combo/coding → vendor/different-model"]);
   });
   test("uses owned_by metadata instead of model-id prefix for combo persistence", async () => {
     const host = new FakeOmpHost();
@@ -449,7 +451,7 @@ describe("OMP adapter", () => {
 
     await streamFor("cheap/titler", "vendor/tiny-model");
     expect(context.model?.name).toBe("combo/coding → vendor/main-model");
-    expect(context.statuses.every(([, text]) => text === undefined)).toBeTrue();
+    expect(context.statuses.at(-1)).toEqual(["omniroute-route", "combo/coding → vendor/main-model"]);
   });
 
   test("keeps a direct model label plain when no routing occurs", async () => {
@@ -767,6 +769,7 @@ describe("OMP adapter", () => {
     }
 
     expect(context.model?.name).toBe("combo/coding → vendor/model-from-header");
+    expect(context.statuses.at(-1)).toEqual(["omniroute-route", "combo/coding → vendor/model-from-header"]);
   });
 
 });
