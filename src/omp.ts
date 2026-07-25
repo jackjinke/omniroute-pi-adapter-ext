@@ -66,33 +66,50 @@ function createOmpRouteStream(
   format: OmniRouteApiFormat,
 ): typeof streamOpenAICompletions {
   const routeNames = new Map<string, string>();
-  let statusContext: OmpContext | undefined;
+  const modelBaseIds = new WeakMap<object, string>();
+  let activeModel: OmpContext["model"] | undefined;
+  let activeModelId: string | undefined;
 
   api.on("session_start", (_event, context) => {
-    statusContext = context;
-    const model = context.model;
-    if (!model || !modelIds.has(model.id)) return;
-    const modelId = model.id;
+    routeNames.clear();
+    activeModel = context.model;
+    if (!activeModel) {
+      activeModelId = undefined;
+      return;
+    }
+    const model = activeModel;
+    const modelId = modelBaseIds.get(model) ?? model.id;
+    if (!modelIds.has(modelId)) {
+      activeModelId = undefined;
+      return;
+    }
+    modelBaseIds.set(model, modelId);
+    activeModelId = modelId;
+    const displayId = () => routeNames.get(modelId) ?? modelId;
+    Object.defineProperty(model, "id", {
+      configurable: true,
+      enumerable: true,
+      get: displayId,
+      set: () => {},
+    });
     Object.defineProperty(model, "name", {
       configurable: true,
       enumerable: true,
-      get: () => routeNames.get(modelId) ?? modelId,
+      get: displayId,
       set: () => {},
     });
   });
 
   return (model, context, options) => {
-    const requestedModel = modelIds.has(model.id) ? model.id : undefined;
+    const requestedModel = model === activeModel && activeModelId
+      ? activeModelId
+      : modelIds.has(model.id)
+        ? model.id
+        : undefined;
     const callerFetch = options?.fetch ?? fetch;
     if (requestedModel && !comboIds.has(requestedModel)) routeNames.delete(requestedModel);
     const updateRouteName = (routedModel: string) => {
-      const status = resolvedRouteStatus(requestedModel!, routedModel);
-      routeNames.set(requestedModel!, status);
-      // OMP's native footer renders model.id, not model.name. Publish routed
-      // status only for active session model; side requests keep mapping isolated.
-      const activeContext = statusContext;
-      if (!activeContext || activeContext.model?.id !== requestedModel) return;
-      activeContext.ui.setStatus("omniroute-route", status);
+      routeNames.set(requestedModel!, resolvedRouteStatus(requestedModel!, routedModel));
     };
     const simpleOptions = options as OpenAICompletionsOptions & {
       reasoning?: ReasoningEffort;
@@ -127,7 +144,12 @@ function createOmpRouteStream(
         });
       },
     };
-    const providerModel = { ...model, api: PROVIDER_API_BY_FORMAT[format], compat: { ...model.compat } };
+    const providerModel = {
+      ...model,
+      id: requestedModel ?? model.id,
+      api: PROVIDER_API_BY_FORMAT[format],
+      compat: { ...model.compat },
+    };
     return format === "responses"
       ? streamOpenAIResponses(providerModel as never, context, wrappedOptions as never)
       : streamOpenAICompletions(providerModel as never, context, wrappedOptions);
