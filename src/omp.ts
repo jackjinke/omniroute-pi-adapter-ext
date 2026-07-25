@@ -66,7 +66,6 @@ function createOmpRouteStream(
   format: OmniRouteApiFormat,
 ): typeof streamOpenAICompletions {
   const routeNames = new Map<string, string>();
-  const modelBaseIds = new WeakMap<object, string>();
   let activeModel: OmpContext["model"] | undefined;
   let activeModelId: string | undefined;
 
@@ -78,24 +77,16 @@ function createOmpRouteStream(
       return;
     }
     const model = activeModel;
-    const modelId = modelBaseIds.get(model) ?? model.id;
+    const modelId = model.id;
     if (!modelIds.has(modelId)) {
       activeModelId = undefined;
       return;
     }
-    modelBaseIds.set(model, modelId);
     activeModelId = modelId;
-    const displayId = () => routeNames.get(modelId) ?? modelId;
-    Object.defineProperty(model, "id", {
-      configurable: true,
-      enumerable: true,
-      get: displayId,
-      set: () => {},
-    });
     Object.defineProperty(model, "name", {
       configurable: true,
       enumerable: true,
-      get: displayId,
+      get: () => routeNames.get(modelId) ?? modelId,
       set: () => {},
     });
   });
