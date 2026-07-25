@@ -257,15 +257,103 @@ export function resolvedRouteStatus(requestedModel: string, routedModel: string)
 
 }
 
+/**
+ * Frames OmniRoute injects itself to hold a slow stream open before the provider
+ * responds (`open-sse/utils/earlyStreamKeepalive.ts`). They are not provider output:
+ * the chat frame carries visible `reasoning_content` and both formats claim
+ * `model: "omniroute"`, so they must not reach the host as thinking text or routing.
+ */
+const KEEPALIVE_CHAT_ID = "omniroute-keepalive";
+const KEEPALIVE_RESPONSES_ITEM_ID = "rs_omniroute_keepalive";
+const KEEPALIVE_MODEL = "omniroute";
+
+export function isOmniRouteKeepalivePayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false;
+  const record = payload as Record<string, unknown>;
+  if (record.id === KEEPALIVE_CHAT_ID || record.model === KEEPALIVE_MODEL) return true;
+  if (record.item_id === KEEPALIVE_RESPONSES_ITEM_ID) return true;
+  const item = record.item;
+  return !!item
+    && typeof item === "object"
+    && (item as Record<string, unknown>).id === KEEPALIVE_RESPONSES_ITEM_ID;
+}
+
+function parseSseData(line: string): Record<string, unknown> | undefined {
+  if (!line.startsWith("data:")) return undefined;
+  try {
+    const payload = JSON.parse(line.slice(5).trim());
+    return payload && typeof payload === "object" ? payload as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function extractOmniRouteModel(rawLines: readonly string[]): string | undefined {
   for (const line of rawLines) {
     const trailer = /^:\s*x-omniroute-model=(.+)$/i.exec(line.trim());
     if (trailer?.[1]) return trailer[1].trim();
-    if (!line.startsWith("data:")) continue;
-    try {
-      const payload = JSON.parse(line.slice(5).trim());
-      if (payload && typeof payload === "object" && typeof payload.model === "string") return payload.model.trim();
-    } catch {}
+    const payload = parseSseData(line);
+    if (!payload || isOmniRouteKeepalivePayload(payload)) continue;
+    // Chat Completions reports the resolved model per chunk; Responses nests it
+    // under `response` on created/in_progress/completed events.
+    if (typeof payload.model === "string" && payload.model.trim()) return payload.model.trim();
+    const response = payload.response;
+    if (!response || typeof response !== "object") continue;
+    const nested = (response as Record<string, unknown>).model;
+    if (typeof nested === "string" && nested.trim()) return nested.trim();
   }
   return undefined;
+}
+
+const SSE_RECORD_BOUNDARY = /\r?\n\r?\n/;
+
+/**
+ * Re-frames an OmniRoute SSE body record by record, dropping keepalive frames and
+ * reporting every surviving record's lines for route sniffing.
+ *
+ * Dropping costs no keepalive protection: the host's pre-response watchdog is
+ * already cleared by the response headers the slow path commits early, and pi-ai's
+ * stream watchdog classifies these frames as progress — which would demote the long
+ * first-event budget to the short idle budget while the provider is still thinking.
+ */
+export function stripKeepaliveFrames(
+  response: Response,
+  onRecord: (lines: readonly string[]) => void,
+): Response {
+  if (!response.body) return response;
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let pending = "";
+
+  const emit = (record: string, controller: TransformStreamDefaultController<Uint8Array>) => {
+    const lines = record.split(/\r?\n/).filter(Boolean);
+    if (lines.length === 0) return;
+    onRecord(lines);
+    if (lines.some(line => isOmniRouteKeepalivePayload(parseSseData(line)))) return;
+    controller.enqueue(encoder.encode(record));
+  };
+
+  const drain = (controller: TransformStreamDefaultController<Uint8Array>) => {
+    while (true) {
+      const boundary = SSE_RECORD_BOUNDARY.exec(pending);
+      if (!boundary) return;
+      const end = boundary.index + boundary[0].length;
+      emit(pending.slice(0, end), controller);
+      pending = pending.slice(end);
+    }
+  };
+
+  const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      pending += decoder.decode(chunk, { stream: true });
+      drain(controller);
+    },
+    flush(controller) {
+      pending += decoder.decode();
+      drain(controller);
+      if (pending) emit(pending, controller);
+      pending = "";
+    },
+  }));
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }

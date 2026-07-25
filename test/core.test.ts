@@ -75,6 +75,33 @@ class FakePiHost implements PiExtensionAPI {
   }
 }
 
+/**
+ * Config discovery falls back to `$HOME/.omp/agent` when `PI_CODING_AGENT_DIR` is
+ * unset, so tests that omit it would read the developer's real `omniroute.yml`.
+ * Every activation test pins an empty directory to keep defaults deterministic.
+ */
+function isolatedEnv(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    OMNIROUTE_API_KEY: "secret",
+    PI_CODING_AGENT_DIR: mkdtempSync(join(tmpdir(), "omniroute-agent-")),
+    ...extra,
+  };
+}
+
+/** Verbatim frames from OmniRoute's open-sse/utils/earlyStreamKeepalive.ts. */
+const CHAT_KEEPALIVE_FRAME =
+  'data: {"id":"omniroute-keepalive","object":"chat.completion.chunk","created":0,"model":"omniroute",'
+  + '"choices":[{"index":0,"delta":{"reasoning_content":"OmniRoute: got request, sending to provider"},"finish_reason":null}]}';
+const RESPONSES_KEEPALIVE_FRAME = [
+  'event: response.output_item.added',
+  'data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_omniroute_keepalive","type":"reasoning","summary":[]}}',
+  "",
+  'event: response.reasoning_summary_text.delta',
+  'data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_omniroute_keepalive","output_index":0,"summary_index":0,'
+  + '"delta":"OmniRoute: got request, sending to provider"}',
+  "",
+].join("\n");
+
 describe("shared catalog logic", () => {
   test("preserves discovered metadata and configured effort levels", () => {
     const result = normalizeCatalog({
@@ -235,6 +262,22 @@ describe("shared catalog logic", () => {
     expect(extractOmniRouteModel(["data: [DONE]"])).toBeUndefined();
   });
 
+  test("never attributes routing to OmniRoute's own keepalive frames", () => {
+    // Both formats stamp model "omniroute" on the synthetic frame; treating that as
+    // a resolution would flash a bogus "requested → omniroute" status line.
+    expect(extractOmniRouteModel([CHAT_KEEPALIVE_FRAME])).toBeUndefined();
+    expect(extractOmniRouteModel(RESPONSES_KEEPALIVE_FRAME.split("\n"))).toBeUndefined();
+    expect(extractOmniRouteModel([
+      'data: {"id":"omniroute-keepalive","object":"chat.completion.chunk","model":"omniroute","choices":[{"index":0,"delta":{}}]}',
+    ])).toBeUndefined();
+  });
+
+  test("reads the routed model from a Responses envelope", () => {
+    expect(extractOmniRouteModel([
+      'data: {"type":"response.created","response":{"id":"resp_1","model":"vendor/live-model"}}',
+    ])).toBe("vendor/live-model");
+  });
+
   test("only distinguishes routed models when the response model differs", () => {
     expect(resolvedRouteStatus("direct/model", "direct/model")).toBe("direct/model");
     expect(resolvedRouteStatus("requested/model", "routed/model")).toBe("requested/model → routed/model");
@@ -247,7 +290,7 @@ describe("OMP adapter", () => {
     const host = new FakeOmpHost();
     await activateOmp(
       host,
-      { OMNIROUTE_API_KEY: "secret", OMNIROUTE_BASE_URL: "http://router.test" },
+      isolatedEnv({ OMNIROUTE_BASE_URL: "http://router.test" }),
       async () => Response.json({
         data: [{ id: "any/model", capabilities: { reasoning: true } }],
       }),
@@ -261,7 +304,7 @@ describe("OMP adapter", () => {
   });
   test("keeps a resolved combo without later routing metadata and accepts a new resolution", async () => {
     const host = new FakeOmpHost();
-    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+    await activateOmp(host, isolatedEnv(), async () => Response.json({
       data: [{ id: "combo/coding" }],
     }));
     const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
@@ -313,9 +356,78 @@ describe("OMP adapter", () => {
     expect(context.model?.name).toBe("combo/coding → vendor/different-model");
   });
 
+  test("suppresses the keepalive thinking frame while forwarding real output", async () => {
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv(), async () => Response.json({ data: [{ id: "combo/coding" }] }));
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+    host.emit("session_start", context);
+
+    const model = {
+      ...host.provider!.config.models[0],
+      provider: "omniroute",
+      api: "omniroute-openai-completions",
+      baseUrl: "http://router.test/v1",
+    } as never;
+    const events = host.provider!.config.streamSimple!(model, { messages: [] } as never, {
+      apiKey: "secret",
+      fetch: async () => new Response([
+        CHAT_KEEPALIVE_FRAME,
+        "",
+        'data: {"id":"1","object":"chat.completion.chunk","model":"vendor/model-id","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":"stop"}]}',
+        "",
+        "data: [DONE]",
+        "",
+      ].join("\n"), { headers: { "Content-Type": "text/event-stream" } }),
+    });
+
+    const text: string[] = [];
+    for await (const event of events as AsyncIterable<Record<string, unknown>>) {
+      if (event.type === "text_delta" && typeof event.delta === "string") text.push(event.delta);
+      if (event.type === "thinking_delta" && typeof event.delta === "string") text.push(event.delta);
+    }
+
+    expect(text.join("")).toBe("OK");
+    expect(text.join("")).not.toContain("OmniRoute: got request");
+    expect(context.model?.name).toBe("combo/coding → vendor/model-id");
+  });
+
+  test("keeps a side request's routing off the main model's status line", async () => {
+    // Title generation / auto thinking-level probes stream a different model
+    // concurrently; their resolution must not retitle the session's model.
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv(), async () => Response.json({
+      data: [{ id: "combo/coding" }, { id: "cheap/titler" }],
+    }));
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+    host.emit("session_start", context);
+
+    const stream = host.provider!.config.streamSimple!;
+    const streamFor = async (id: string, routedModel: string) => {
+      const model = {
+        ...host.provider!.config.models.find(entry => entry.id === id)!,
+        provider: "omniroute",
+        api: "omniroute-openai-completions",
+        baseUrl: "http://router.test/v1",
+      } as never;
+      const events = stream(model, { messages: [] } as never, {
+        apiKey: "secret",
+        fetch: async () => new Response(`: x-omniroute-model=${routedModel}\n\ndata: [DONE]\n\n`, {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      });
+      for await (const _event of events) { /* consume the provider stream */ }
+    };
+
+    await streamFor("combo/coding", "vendor/main-model");
+    expect(context.model?.name).toBe("combo/coding → vendor/main-model");
+
+    await streamFor("cheap/titler", "vendor/tiny-model");
+    expect(context.model?.name).toBe("combo/coding → vendor/main-model");
+  });
+
   test("keeps a direct model label plain when no routing occurs", async () => {
     const host = new FakeOmpHost();
-    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+    await activateOmp(host, isolatedEnv(), async () => Response.json({
       data: [{ id: "direct/model" }],
     }));
     const context = fakeContext({ id: "direct/model", name: "direct/model" });
@@ -344,7 +456,7 @@ describe("OMP adapter", () => {
 
   test("sends the selected reasoning effort to OmniRoute", async () => {
     const host = new FakeOmpHost();
-    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+    await activateOmp(host, isolatedEnv(), async () => Response.json({
       data: [{
         id: "combo/coding",
         capabilities: { reasoning: true, effort_tiers: ["low", "medium", "high", "max"] },
@@ -375,7 +487,7 @@ describe("OMP adapter", () => {
   test("uses OMP's live thinking level when custom API options omit reasoning", async () => {
     const host = new FakeOmpHost();
     host.thinkingLevel = "high";
-    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+    await activateOmp(host, isolatedEnv(), async () => Response.json({
       data: [{ id: "any/model", capabilities: { reasoning: true } }],
     }));
 
@@ -403,7 +515,7 @@ describe("OMP adapter", () => {
   test("injects the live effort into every discovered model payload after provider shaping", async () => {
     const host = new FakeOmpHost();
     host.thinkingLevel = "xhigh";
-    await activateOmp(host, { OMNIROUTE_API_KEY: "secret" }, async () => Response.json({
+    await activateOmp(host, isolatedEnv(), async () => Response.json({
       data: [
         { id: "first/model" },
         { id: "second/model", capabilities: { reasoning: false } },
@@ -425,28 +537,60 @@ describe("OMP adapter", () => {
     const host = new FakeOmpHost();
     await activateOmp(
       host,
-      { OMNIROUTE_API_KEY: "secret" },
+      isolatedEnv(),
       async () => new Response("unavailable", { status: 503 }),
     );
     expect(host.provider).toBeUndefined();
   });
-  test("registers native Responses without a custom stream and shapes reasoning", async () => {
+  test("registers Responses through the custom stream and shapes reasoning", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-format-"));
     writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
     const host = new FakeOmpHost();
     host.thinkingLevel = "high";
     await activateOmp(
       host,
-      { OMNIROUTE_API_KEY: "secret", PI_CODING_AGENT_DIR: agentDir },
+      isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }),
       async () => Response.json({ data: [{ id: "combo/coding", capabilities: { reasoning: true } }] }),
     );
 
-    expect(host.provider?.config.api).toBe("openai-responses");
-    expect(host.provider?.config.streamSimple).toBeUndefined();
+    expect(host.provider?.config.api).toBe("omniroute-openai-responses");
+    expect(host.provider?.config.streamSimple).toBeDefined();
     expect(await host.emitBeforeProviderRequest({ model: "combo/coding", input: [] }, fakeContext())).toMatchObject({
       model: "combo/coding",
       reasoning: { effort: "high" },
     });
+  });
+
+  test("resolves the routed model from a Responses stream and drops keepalive frames", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-route-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }), async () => Response.json({
+      data: [{ id: "combo/coding" }],
+    }));
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+    host.emit("session_start", context);
+
+    const model = {
+      ...host.provider!.config.models[0],
+      provider: "omniroute",
+      api: "omniroute-openai-responses",
+      baseUrl: "http://router.test/v1",
+    } as never;
+    const events = host.provider!.config.streamSimple!(model, { messages: [] } as never, {
+      apiKey: "secret",
+      fetch: async () => new Response([
+        RESPONSES_KEEPALIVE_FRAME,
+        'event: response.created',
+        'data: {"type":"response.created","response":{"id":"resp_1","model":"vendor/model-id"}}',
+        "",
+        "data: [DONE]",
+        "",
+      ].join("\n"), { headers: { "Content-Type": "text/event-stream" } }),
+    });
+    for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(context.model?.name).toBe("combo/coding → vendor/model-id");
   });
 });
 
@@ -455,7 +599,7 @@ describe("Pi adapter", () => {
     const host = new FakePiHost();
     await activatePi(
       host,
-      { OMNIROUTE_API_KEY: "secret", OMNIROUTE_BASE_URL: "http://router.test" },
+      isolatedEnv({ OMNIROUTE_BASE_URL: "http://router.test" }),
       async () => Response.json({
         data: [{
           id: "combo/coding",
@@ -477,7 +621,7 @@ describe("Pi adapter", () => {
     const host = new FakePiHost();
     await activatePi(
       host,
-      { OMNIROUTE_API_KEY: "secret", PI_CODING_AGENT_DIR: agentDir },
+      isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }),
       async () => Response.json({ data: [{ id: "combo/coding" }] }),
     );
 

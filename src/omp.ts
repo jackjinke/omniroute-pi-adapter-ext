@@ -1,5 +1,17 @@
-import { streamOpenAICompletions, type OpenAICompletionsOptions } from "@oh-my-pi/pi-ai";
-import { extractOmniRouteModel, omniRouteConfigPath, resolvedRouteStatus, tryDiscoverModels, type OmniRouteApiFormat, type OmniRouteModel } from "./shared.ts";
+import {
+  streamOpenAICompletions,
+  streamOpenAIResponses,
+  type OpenAICompletionsOptions,
+} from "@oh-my-pi/pi-ai";
+import {
+  extractOmniRouteModel,
+  omniRouteConfigPath,
+  resolvedRouteStatus,
+  stripKeepaliveFrames,
+  tryDiscoverModels,
+  type OmniRouteApiFormat,
+  type OmniRouteModel,
+} from "./shared.ts";
 
 type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -17,63 +29,41 @@ interface OmpContext {
   };
 }
 
+/**
+ * Both formats register under an OmniRoute-specific API id so the host dispatches
+ * through our `streamSimple`; the built-in id is restored before delegating, since
+ * that is what pi-ai's provider reads. Registering a built-in id directly is
+ * rejected by pi-ai's custom-API registry and would forfeit the hook entirely.
+ */
+const HOST_API_BY_FORMAT = {
+  chat_completions: "omniroute-openai-completions",
+  responses: "omniroute-openai-responses",
+} as const satisfies Record<OmniRouteApiFormat, string>;
+
+const PROVIDER_API_BY_FORMAT = {
+  chat_completions: "openai-completions",
+  responses: "openai-responses",
+} as const satisfies Record<OmniRouteApiFormat, string>;
+
 interface OmpProviderConfig {
   name: string;
   baseUrl: string;
   apiKey: string;
-  api: "omniroute-openai-completions" | "openai-responses";
+  api: (typeof HOST_API_BY_FORMAT)[OmniRouteApiFormat];
   streamSimple?: typeof streamOpenAICompletions;
   models: OmniRouteModel[];
 }
 
-function observeRouteResponse(
-  response: Response,
-  requestedModel: string,
-  updateModelName: (name: string) => void,
-): Response {
-  if (!response.body) return response;
-  const decoder = new TextDecoder();
-  let pending = "";
-  const inspect = (text: string) => {
-    pending += text;
-    const lines = pending.split(/\r?\n/);
-    pending = lines.pop() ?? "";
-    for (const line of lines) {
-      const routedModel = extractOmniRouteModel([line]);
-      if (routedModel) updateModelName(resolvedRouteStatus(requestedModel, routedModel));
-    }
-  };
-  const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      inspect(decoder.decode(chunk, { stream: true }));
-      controller.enqueue(chunk);
-    },
-    flush() {
-      inspect(decoder.decode() + "\n");
-    },
-  }));
-  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-}
-
-function withReasoningEffort(
-  payload: unknown,
+/**
+ * Route status is keyed by the requested model id, never by a single shared slot:
+ * side requests (title generation, auto thinking-level probes) stream a different
+ * model concurrently, and their resolution must not retitle the session's model.
+ */
+function createOmpRouteStream(
+  api: OmpExtensionAPI,
   modelIds: Set<string>,
-  reasoning: ReasoningEffort | undefined,
   format: OmniRouteApiFormat,
-): unknown {
-  if (!reasoning || !payload || typeof payload !== "object") return payload;
-  const body = payload as Record<string, unknown>;
-  if (typeof body.model !== "string" || !modelIds.has(body.model)) return payload;
-  if (body.reasoning_effort !== undefined || body.reasoning !== undefined) return payload;
-  if (format === "responses") {
-    body.reasoning = { effort: reasoning };
-  } else {
-    body.reasoning_effort = reasoning;
-  }
-  return payload;
-}
-
-function createOmpRouteStream(api: OmpExtensionAPI, modelIds: Set<string>): typeof streamOpenAICompletions {
+): typeof streamOpenAICompletions {
   const routeNames = new Map<string, string>();
   let statusContext: OmpContext | undefined;
 
@@ -94,26 +84,45 @@ function createOmpRouteStream(api: OmpExtensionAPI, modelIds: Set<string>): type
     const requestedModel = modelIds.has(model.id) ? model.id : undefined;
     const callerFetch = options?.fetch ?? fetch;
     if (requestedModel && !requestedModel.startsWith("combo/")) routeNames.delete(requestedModel);
-    const updateRoute = (status: string) => {
-      if (!requestedModel) return;
-      routeNames.set(requestedModel, status);
-      statusContext?.ui.setStatus("omniroute-route", undefined);
-    };
     const simpleOptions = options as OpenAICompletionsOptions & { reasoning?: ReasoningEffort };
     const wrappedOptions: OpenAICompletionsOptions = {
       ...simpleOptions,
+      // Only supply the host's live thinking level when the caller left it unset:
+      // an explicit per-request effort (side requests pick their own) always wins.
       reasoning: simpleOptions.reasoning ?? api.getThinkingLevel(),
-      fetch: requestedModel
-        ? async (input, init) => observeRouteResponse(await callerFetch(input, init), requestedModel, updateRoute)
-        : callerFetch,
+      fetch: async (input, init) => stripKeepaliveFrames(await callerFetch(input, init), lines => {
+        if (!requestedModel) return;
+        const routedModel = extractOmniRouteModel(lines);
+        if (!routedModel) return;
+        routeNames.set(requestedModel, resolvedRouteStatus(requestedModel, routedModel));
+        statusContext?.ui.setStatus("omniroute-route", undefined);
+      }),
     };
-    return streamOpenAICompletions(
-      { ...model, api: "openai-completions", compat: { ...model.compat } },
-      context,
-      wrappedOptions,
-    );
+    const providerModel = { ...model, api: PROVIDER_API_BY_FORMAT[format], compat: { ...model.compat } };
+    return format === "responses"
+      ? streamOpenAIResponses(providerModel as never, context, wrappedOptions as never)
+      : streamOpenAICompletions(providerModel as never, context, wrappedOptions);
   };
 }
+
+function withReasoningEffort(
+  payload: unknown,
+  modelIds: Set<string>,
+  reasoning: ReasoningEffort | undefined,
+  format: OmniRouteApiFormat,
+): unknown {
+  if (!reasoning || !payload || typeof payload !== "object") return payload;
+  const body = payload as Record<string, unknown>;
+  if (typeof body.model !== "string" || !modelIds.has(body.model)) return payload;
+  if (body.reasoning_effort !== undefined || body.reasoning !== undefined) return payload;
+  if (format === "responses") {
+    body.reasoning = { effort: reasoning };
+  } else {
+    body.reasoning_effort = reasoning;
+  }
+  return payload;
+}
+
 
 export async function activateOmp(
   api: OmpExtensionAPI,
@@ -134,8 +143,8 @@ export async function activateOmp(
     name: "OmniRoute",
     baseUrl: `${config.baseUrl}/v1`,
     apiKey: config.apiKey,
-    api: config.format === "responses" ? "openai-responses" : "omniroute-openai-completions",
-    ...(config.format === "chat_completions" ? { streamSimple: createOmpRouteStream(api, modelIds) } : {}),
+    api: HOST_API_BY_FORMAT[config.format],
+    streamSimple: createOmpRouteStream(api, modelIds, config.format),
     models,
   });
 }

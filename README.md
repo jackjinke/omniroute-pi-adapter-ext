@@ -7,7 +7,8 @@ OmniRoute adapter for Pi 0.80.10+ and OMP 17.0.5+.
 - Loads every `/v1/models` entry before startup model resolution without classifying entries by owner or ID convention.
 - Uses each entry's `capabilities.effort_tiers` when OmniRoute supplies it.
 - Otherwise exposes `low`, `medium`, `high`, `xhigh`, and `max`; override per entry in `omniroute.yml`.
-- OMP shows the requested and routed model IDs only when they differ.
+- OMP shows the requested and routed model IDs only when they differ, in both API formats.
+- Drops OmniRoute's synthetic slow-start keepalive frames so they never surface as thinking text or as a routed model named `omniroute`. The keepalive still does its job: the early HTTP commit that keeps the connection alive is untouched.
 - Logs a warning and lets the host continue when startup discovery fails.
 
 Shared OmniRoute logic lives in `src/shared.ts`. Host-specific behavior lives in `src/pi.ts` and `src/omp.ts`.
