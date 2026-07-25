@@ -85,13 +85,27 @@ function createOmpRouteStream(
     const requestedModel = modelIds.has(model.id) ? model.id : undefined;
     const callerFetch = options?.fetch ?? fetch;
     if (requestedModel && !comboIds.has(requestedModel)) routeNames.delete(requestedModel);
-    const simpleOptions = options as OpenAICompletionsOptions & { reasoning?: ReasoningEffort };
-    const wrappedOptions: OpenAICompletionsOptions = {
+    const simpleOptions = options as OpenAICompletionsOptions & {
+      reasoning?: ReasoningEffort;
+      reasoningSummary?: "auto" | "detailed" | "concise" | null;
+      hideThinkingSummary?: boolean;
+    };
+    const wrappedOptions = {
       ...simpleOptions,
       // Only supply the host's live thinking level when the caller left it unset:
       // an explicit per-request effort (side requests pick their own) always wins.
       reasoning: simpleOptions.reasoning ?? api.getThinkingLevel(),
-      fetch: async (input, init) => stripKeepaliveFrames(await callerFetch(input, init), lines => {
+      // OpenAI Responses emits reasoning summary events only when requested.
+      // Preserve explicit host preference; otherwise mirror normal thinking
+      // visibility and request auto summaries by default.
+      reasoningSummary: format === "responses"
+        ? simpleOptions.reasoningSummary !== undefined
+          ? simpleOptions.reasoningSummary
+          : simpleOptions.hideThinkingSummary
+            ? null
+            : "auto"
+        : simpleOptions.reasoningSummary,
+      fetch: async (input: string | URL | Request, init?: RequestInit) => stripKeepaliveFrames(await callerFetch(input, init), lines => {
         if (!requestedModel) return;
         const routedModel = extractOmniRouteModel(lines);
         if (!routedModel) return;

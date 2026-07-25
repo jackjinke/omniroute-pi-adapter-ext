@@ -588,6 +588,28 @@ describe("OMP adapter", () => {
       reasoning: { effort: "high" },
     });
   });
+  test("requests Responses reasoning summaries by default", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-summary-request-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }), async () => Response.json({
+      data: [{ id: "primary-auto", owned_by: "combo", capabilities: { reasoning: true } }],
+    }));
+    let requestBody: Record<string, any> | undefined;
+    const model = { ...host.provider!.config.models[0], provider: "omniroute", api: "omniroute-openai-responses", baseUrl: "http://router.test/v1" } as never;
+    const events = host.provider!.config.streamSimple!(model, { messages: [] } as never, {
+      apiKey: "secret",
+      fetch: async (_input: string | URL | Request, init?: RequestInit) => {
+        requestBody = JSON.parse(String(init?.body));
+        return new Response('data: {"type":"response.completed","response":{"id":"resp_1","status":"completed"}}\n\n', {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      },
+    });
+    for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(requestBody?.reasoning?.summary).toBe("auto");
+  });
 
   test("resolves the routed model from a Responses stream and drops keepalive frames", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-route-"));
