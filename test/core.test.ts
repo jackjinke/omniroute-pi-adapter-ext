@@ -265,7 +265,7 @@ describe("shared catalog logic", () => {
 
   test("never attributes routing to OmniRoute's own keepalive frames", () => {
     // Both formats stamp model "omniroute" on the synthetic frame; treating that as
-    // a resolution would flash a bogus "requested → omniroute" status line.
+    // a resolution would flash a bogus "requested→omniroute" status line.
     expect(extractOmniRouteModel([CHAT_KEEPALIVE_FRAME])).toBeUndefined();
     expect(extractOmniRouteModel(RESPONSES_KEEPALIVE_FRAME.split("\n"))).toBeUndefined();
     expect(extractOmniRouteModel([
@@ -284,7 +284,7 @@ describe("shared catalog logic", () => {
 
   test("only distinguishes routed models when the response model differs", () => {
     expect(resolvedRouteStatus("direct/model", "direct/model")).toBe("direct/model");
-    expect(resolvedRouteStatus("requested/model", "routed/model")).toBe("requested/model → routed/model");
+    expect(resolvedRouteStatus("requested/model", "routed/model")).toBe("requested/model→routed/model");
   });
 
 });
@@ -332,7 +332,7 @@ describe("OMP adapter", () => {
       },
     );
     if (events) for await (const _event of events) { /* consume the provider stream */ }
-    expect(context.model?.name).toBe("combo/coding → vendor/model-id");
+    expect(context.model?.name).toBe("combo/coding→vendor/model-id");
 
     const unresolvedEvents = stream?.(
       routedModel,
@@ -343,7 +343,7 @@ describe("OMP adapter", () => {
       },
     );
     if (unresolvedEvents) for await (const _event of unresolvedEvents) { /* consume the provider stream */ }
-    expect(context.model?.name).toBe("combo/coding → vendor/model-id");
+    expect(context.model?.name).toBe("combo/coding→vendor/model-id");
 
     const reroutedEvents = stream?.(
       routedModel,
@@ -356,7 +356,7 @@ describe("OMP adapter", () => {
       },
     );
     if (reroutedEvents) for await (const _event of reroutedEvents) { /* consume the provider stream */ }
-    expect(context.model?.name).toBe("combo/coding → vendor/different-model");
+    expect(context.model?.name).toBe("combo/coding→vendor/different-model");
   });
   test("uses owned_by metadata instead of model-id prefix for combo persistence", async () => {
     const host = new FakeOmpHost();
@@ -376,9 +376,9 @@ describe("OMP adapter", () => {
     };
 
     await run(": x-omniroute-model=vendor/first\n\ndata: [DONE]\n\n");
-    expect(context.model?.name).toBe("primary-auto → vendor/first");
+    expect(context.model?.name).toBe("primary-auto→vendor/first");
     await run("data: [DONE]\n\n");
-    expect(context.model?.name).toBe("primary-auto → vendor/first");
+    expect(context.model?.name).toBe("primary-auto→vendor/first");
   });
 
   test("suppresses the keepalive thinking frame while forwarding real output", async () => {
@@ -413,7 +413,7 @@ describe("OMP adapter", () => {
 
     expect(text.join("")).toBe("OK");
     expect(text.join("")).not.toContain("OmniRoute: got request");
-    expect(context.model?.name).toBe("combo/coding → vendor/model-id");
+    expect(context.model?.name).toBe("combo/coding→vendor/model-id");
   });
 
   test("keeps a side request's routing off the main model's status line", async () => {
@@ -444,10 +444,10 @@ describe("OMP adapter", () => {
     };
 
     await streamFor("combo/coding", "vendor/main-model");
-    expect(context.model?.name).toBe("combo/coding → vendor/main-model");
+    expect(context.model?.name).toBe("combo/coding→vendor/main-model");
 
     await streamFor("cheap/titler", "vendor/tiny-model");
-    expect(context.model?.name).toBe("combo/coding → vendor/main-model");
+    expect(context.model?.name).toBe("combo/coding→vendor/main-model");
   });
 
   test("keeps a direct model label plain when no routing occurs", async () => {
@@ -638,7 +638,7 @@ describe("OMP adapter", () => {
     });
     for await (const _event of events) { /* consume the provider stream */ }
 
-    expect(context.model?.name).toBe("combo/coding → vendor/model-id");
+    expect(context.model?.name).toBe("combo/coding→vendor/model-id");
   });
   test("preserves real Responses reasoning summary events", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-reasoning-"));
@@ -707,7 +707,7 @@ describe("OMP adapter", () => {
     });
     for await (const _event of events) { /* consume the provider stream */ }
 
-    expect(context.model?.name).toBe("combo/coding → openai/gpt-5.2");
+    expect(context.model?.name).toBe("combo/coding→openai/gpt-5.2");
   });
 
   test("keeps Responses route from final OmniRoute metadata trailer", async () => {
@@ -730,7 +730,7 @@ describe("OMP adapter", () => {
     });
     for await (const _event of events) { /* consume the provider stream */ }
 
-    expect(context.model?.name).toBe("combo/coding → openai/gpt-5.2");
+    expect(context.model?.name).toBe("combo/coding→openai/gpt-5.2");
   });
   test("uses response model header and keeps sticky combo route", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-header-route-"));
@@ -764,7 +764,7 @@ describe("OMP adapter", () => {
       for await (const _event of events) { /* consume the provider stream */ }
     }
 
-    expect(context.model?.name).toBe("combo/coding → vendor/model-from-header");
+    expect(context.model?.name).toBe("combo/coding→vendor/model-from-header");
   });
 
 });

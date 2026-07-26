@@ -258,7 +258,7 @@ export async function tryDiscoverModels(
 }
 
 export function resolvedRouteStatus(requestedModel: string, routedModel: string): string {
-  return requestedModel === routedModel ? requestedModel : `${requestedModel} → ${routedModel}`;
+  return requestedModel === routedModel ? requestedModel : `${requestedModel}→${routedModel}`;
 
 }
 
