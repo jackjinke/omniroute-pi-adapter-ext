@@ -147,10 +147,16 @@ function withReasoningEffort(
   if (!reasoning || !payload || typeof payload !== "object") return payload;
   const body = payload as Record<string, unknown>;
   if (typeof body.model !== "string" || !modelIds.has(body.model)) return payload;
-  if (body.reasoning_effort !== undefined || body.reasoning !== undefined) return payload;
   if (format === "responses") {
-    body.reasoning = { effort: reasoning };
-  } else {
+    if (body.reasoning_effort !== undefined) return payload;
+    if (body.reasoning === undefined) {
+      body.reasoning = { effort: reasoning };
+      return payload;
+    }
+    if (!body.reasoning || typeof body.reasoning !== "object" || Array.isArray(body.reasoning)) return payload;
+    const reasoningConfig = body.reasoning as Record<string, unknown>;
+    if (reasoningConfig.effort === undefined) reasoningConfig.effort = reasoning;
+  } else if (body.reasoning_effort === undefined && body.reasoning === undefined) {
     body.reasoning_effort = reasoning;
   }
   return payload;

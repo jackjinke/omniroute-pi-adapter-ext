@@ -615,6 +615,33 @@ describe("OMP adapter", () => {
       reasoning: { effort: "high" },
     });
   });
+  test("adds live effort when Responses shaping already added a summary", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-effort-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakeOmpHost();
+    host.thinkingLevel = "high";
+    await activateOmp(
+      host,
+      isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }),
+      async () => Response.json({ data: [{ id: "combo/coding", capabilities: { reasoning: true } }] }),
+    );
+
+    expect(await host.emitBeforeProviderRequest({
+      model: "combo/coding",
+      input: [],
+      reasoning: { summary: "auto" },
+    }, fakeContext())).toMatchObject({
+      reasoning: { effort: "high", summary: "auto" },
+    });
+
+    expect(await host.emitBeforeProviderRequest({
+      model: "combo/coding",
+      input: [],
+      reasoning: { effort: "max", summary: "auto" },
+    }, fakeContext())).toMatchObject({
+      reasoning: { effort: "max", summary: "auto" },
+    });
+  });
   test("requests Responses reasoning summaries by default", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-responses-summary-request-"));
     writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
