@@ -306,6 +306,35 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.api).toBe("omniroute-openai-completions");
     expect(host.provider?.config.models.map(model => model.id)).toEqual(["any/model"]);
   });
+  test("updates combo routing after resuming an older session", async () => {
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv(), async () => Response.json({
+      data: [{ id: "combo/coding", owned_by: "combo" }],
+    }));
+    const context = fakeContext({ id: "combo/coding", name: "combo/coding" });
+    host.emit("session_start", context);
+
+    // OMP emits session_switch before restoring the resumed session's model.
+    host.emit("session_switch", context);
+    const resumedModel = {
+      ...host.provider!.config.models[0],
+      name: "combo/coding",
+      provider: "omniroute",
+      api: "omniroute-openai-completions",
+      baseUrl: "http://router.test/v1",
+    };
+    context.model = resumedModel;
+    const events = host.provider!.config.streamSimple!(resumedModel as never, { messages: [] } as never, {
+      apiKey: "secret",
+      fetch: async () => new Response(": x-omniroute-model=vendor/resumed-route\n\ndata: [DONE]\n\n", {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    });
+    for await (const _event of events) { /* consume the provider stream */ }
+
+    expect(context.model!.name).toBe("combo/coding▸vendor/resumed-route");
+  });
+
   test("keeps a resolved combo without later routing metadata and accepts a new resolution", async () => {
     const host = new FakeOmpHost();
     await activateOmp(host, isolatedEnv(), async () => Response.json({

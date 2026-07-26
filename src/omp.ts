@@ -66,37 +66,28 @@ function createOmpRouteStream(
   format: OmniRouteApiFormat,
 ): typeof streamOpenAICompletions {
   const routeNames = new Map<string, string>();
-  let activeModel: OmpContext["model"] | undefined;
-  let activeModelId: string | undefined;
 
-  api.on("session_start", (_event, context) => {
-    routeNames.clear();
-    activeModel = context.model;
-    if (!activeModel) {
-      activeModelId = undefined;
-      return;
-    }
-    const model = activeModel;
+  const bindRouteName = (model: OmpContext["model"] | undefined): string | undefined => {
+    if (!model || !modelIds.has(model.id)) return undefined;
     const modelId = model.id;
-    if (!modelIds.has(modelId)) {
-      activeModelId = undefined;
-      return;
-    }
-    activeModelId = modelId;
     Object.defineProperty(model, "name", {
       configurable: true,
       enumerable: true,
       get: () => routeNames.get(modelId) ?? modelId,
       set: () => {},
     });
-  });
+    return modelId;
+  };
+  const resetRouteState = (_event: { payload?: unknown }, context: OmpContext) => {
+    routeNames.clear();
+    bindRouteName(context.model);
+  };
+
+  api.on("session_start", resetRouteState);
+  api.on("session_switch", resetRouteState);
 
   return (model, context, options) => {
-    const requestedModel = model === activeModel && activeModelId
-      ? activeModelId
-      : modelIds.has(model.id)
-        ? model.id
-        : undefined;
+    const requestedModel = bindRouteName(model);
     const callerFetch = options?.fetch ?? fetch;
     if (requestedModel && !comboIds.has(requestedModel)) routeNames.delete(requestedModel);
     const updateRouteName = (routedModel: string) => {
