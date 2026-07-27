@@ -10,6 +10,7 @@ import {
   stripKeepaliveFrames,
   tryDiscoverModels,
   type OmniRouteApiFormat,
+  type OmniRouteDiscovery,
   type OmniRouteModel,
 } from "./shared.ts";
 
@@ -163,12 +164,40 @@ function withReasoningEffort(
 }
 
 
+// OMP reloads extensions for each subagent and replaces source-scoped provider
+// registrations. Keep the last successful process-local discovery so a transient
+// child failure cannot replace the parent's authenticated provider with nothing.
+const OMP_DISCOVERY_CACHE_KEY = Symbol.for("omniroute-pi-adapter-ext.omp-discovery");
+const globalState = globalThis as Record<PropertyKey, unknown>;
+const ompDiscoveryCache = globalState[OMP_DISCOVERY_CACHE_KEY] instanceof Map
+  ? globalState[OMP_DISCOVERY_CACHE_KEY] as Map<string, OmniRouteDiscovery>
+  : new Map<string, OmniRouteDiscovery>();
+globalState[OMP_DISCOVERY_CACHE_KEY] = ompDiscoveryCache;
+
+async function discoverOmpModels(
+  environment: Record<string, string | undefined>,
+  fetcher: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
+): Promise<OmniRouteDiscovery | undefined> {
+  const configPath = omniRouteConfigPath("omp", environment);
+  const cacheKey = JSON.stringify([
+    configPath,
+    environment.OMNIROUTE_BASE_URL?.trim() ?? "",
+    environment.OMNIROUTE_API_KEY?.trim() ?? "",
+  ]);
+  const discovery = await tryDiscoverModels(environment, fetcher, configPath);
+  if (discovery) {
+    ompDiscoveryCache.set(cacheKey, discovery);
+    return discovery;
+  }
+  return ompDiscoveryCache.get(cacheKey);
+}
+
 export async function activateOmp(
   api: OmpExtensionAPI,
   environment: Record<string, string | undefined> = process.env,
   fetcher: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = fetch,
 ): Promise<void> {
-  const discovery = await tryDiscoverModels(environment, fetcher, omniRouteConfigPath("omp", environment));
+  const discovery = await discoverOmpModels(environment, fetcher);
   if (!discovery) return;
   const { config, catalog: { models } } = discovery;
   const modelIds = new Set(models.map(model => model.id));

@@ -41,6 +41,11 @@ export interface OmniRouteConfig {
   effortOverrides: Record<string, string[]>;
 }
 
+export interface OmniRouteDiscovery {
+  config: OmniRouteConfig;
+  catalog: OmniRouteCatalog;
+}
+
 function positiveInteger(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number(value);
@@ -248,7 +253,7 @@ export async function tryDiscoverModels(
   environment: Record<string, string | undefined> = process.env,
   fetcher: (input: string | URL | Request, init?: RequestInit) => Promise<Response> = fetch,
   effortConfigPath?: string,
-): Promise<{ config: OmniRouteConfig; catalog: OmniRouteCatalog } | undefined> {
+): Promise<OmniRouteDiscovery | undefined> {
   try {
     const config = readConfig(environment, effortConfigPath);
     return { config, catalog: await discoverModels(config, fetcher) };

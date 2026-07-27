@@ -306,6 +306,49 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.api).toBe("omniroute-openai-completions");
     expect(host.provider?.config.models.map(model => model.id)).toEqual(["any/model"]);
   });
+  test("reuses main discovery when a subagent activation cannot reach OmniRoute", async () => {
+    const environment = isolatedEnv({ OMNIROUTE_BASE_URL: "http://router.test" });
+    const mainHost = new FakeOmpHost();
+    await activateOmp(mainHost, environment, async () => Response.json({
+      data: [{ id: "combo/coding", owned_by: "combo" }],
+    }));
+
+    const subagentHost = new FakeOmpHost();
+    await activateOmp(subagentHost, environment, async () => {
+      throw new Error("subagent discovery unavailable");
+    });
+
+    expect(mainHost.provider?.config.apiKey).toBe("secret");
+    expect(subagentHost.provider).toBeDefined();
+    expect(subagentHost.provider?.config.apiKey).toBe("secret");
+    expect(subagentHost.provider?.config.models.map(model => model.id)).toEqual(["combo/coding"]);
+  });
+
+  test("does not reuse cached discovery across connection settings", async () => {
+    const environment = isolatedEnv({
+      OMNIROUTE_API_KEY: "main-secret",
+      OMNIROUTE_BASE_URL: "http://router.test",
+    });
+    const mainHost = new FakeOmpHost();
+    await activateOmp(mainHost, environment, async () => Response.json({
+      data: [{ id: "main/model" }],
+    }));
+
+    const otherCredentialHost = new FakeOmpHost();
+    await activateOmp(otherCredentialHost, { ...environment, OMNIROUTE_API_KEY: "other-secret" }, async () => {
+      throw new Error("other credential unavailable");
+    });
+    const otherEndpointHost = new FakeOmpHost();
+    await activateOmp(otherEndpointHost, { ...environment, OMNIROUTE_BASE_URL: "http://other-router.test" }, async () => {
+      throw new Error("other endpoint unavailable");
+    });
+
+    expect(mainHost.provider?.config.models.map(model => model.id)).toEqual(["main/model"]);
+    expect(otherCredentialHost.provider).toBeUndefined();
+    expect(otherEndpointHost.provider).toBeUndefined();
+  });
+
+
   test("updates combo routing after resuming an older session", async () => {
     const host = new FakeOmpHost();
     await activateOmp(host, isolatedEnv(), async () => Response.json({
