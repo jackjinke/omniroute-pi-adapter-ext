@@ -299,7 +299,6 @@ function parseSseData(line: string): Record<string, unknown> | undefined {
   }
 }
 
-
 export function extractOmniRouteModel(rawLines: readonly string[]): string | undefined {
   for (const line of rawLines) {
     const trailer = /^:\s*x-omniroute-model=(.+)$/i.exec(line.trim());
@@ -318,7 +317,6 @@ export function extractOmniRouteModel(rawLines: readonly string[]): string | und
 }
 
 const SSE_RECORD_BOUNDARY = /\r?\n\r?\n/;
-
 
 /**
  * Re-frames an OmniRoute SSE body record by record, dropping keepalive frames and

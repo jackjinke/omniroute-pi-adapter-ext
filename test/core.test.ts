@@ -309,6 +309,18 @@ describe("OMP adapter", () => {
     expect(host.provider?.config.apiKey).toBe("secret");
     expect(host.provider?.config.api).toBe("omniroute-openai-completions");
     expect(host.provider?.config.models.map(model => model.id)).toEqual(["any/model"]);
+  });
+  test("does not advertise remote compaction for Responses models", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-no-remote-compaction-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakeOmpHost();
+    await activateOmp(
+      host,
+      isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }),
+      async () => Response.json({ data: [{ id: "cx/model", owned_by: "codex" }] }),
+    );
+
+    expect(host.provider?.config.api).toBe("omniroute-openai-responses");
     expect("remoteCompaction" in host.provider!.config.models[0]!).toBe(false);
   });
   test("reuses main discovery when a subagent activation cannot reach OmniRoute", async () => {

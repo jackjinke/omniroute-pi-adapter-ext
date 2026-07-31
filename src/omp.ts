@@ -22,7 +22,6 @@ export interface OmpExtensionAPI {
   on(event: string, handler: (event: { payload?: unknown }, context: OmpContext) => unknown): void;
 }
 
-
 interface OmpRoutableModel {
   id: string;
   name: string;
@@ -52,7 +51,6 @@ const PROVIDER_API_BY_FORMAT = {
   chat_completions: "openai-completions",
   responses: "openai-responses",
 } as const satisfies Record<OmniRouteApiFormat, string>;
-
 
 interface OmpProviderConfig {
   name: string;
