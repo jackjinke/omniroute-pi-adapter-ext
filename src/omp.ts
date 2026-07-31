@@ -22,8 +22,21 @@ export interface OmpExtensionAPI {
   on(event: string, handler: (event: { payload?: unknown }, context: OmpContext) => unknown): void;
 }
 
+interface OmpRemoteCompactionConfig {
+  enabled: true;
+  api: "openai-responses";
+  v2StreamingEnabled: true;
+  model?: string;
+}
+
+interface OmpRoutableModel {
+  id: string;
+  name: string;
+  remoteCompaction?: OmpRemoteCompactionConfig;
+}
+
 interface OmpContext {
-  model?: { id: string; name: string };
+  model?: OmpRoutableModel;
   hasUI: boolean;
   ui: {
     setStatus(key: string, text: string | undefined): void;
@@ -46,6 +59,12 @@ const PROVIDER_API_BY_FORMAT = {
   responses: "openai-responses",
 } as const satisfies Record<OmniRouteApiFormat, string>;
 
+const OMP_REMOTE_COMPACTION: OmpRemoteCompactionConfig = {
+  enabled: true,
+  api: "openai-responses",
+  v2StreamingEnabled: true,
+};
+
 interface OmpProviderConfig {
   name: string;
   baseUrl: string;
@@ -64,11 +83,18 @@ function createOmpRouteStream(
   api: OmpExtensionAPI,
   modelIds: Set<string>,
   comboIds: Set<string>,
+  remoteCompactionModelIds: Set<string>,
   format: OmniRouteApiFormat,
 ): typeof streamOpenAICompletions {
   const routeNames = new Map<string, string>();
+  let getActiveModel: (() => OmpRoutableModel | undefined) | undefined;
 
-  const bindRouteName = (model: OmpContext["model"] | undefined): string | undefined => {
+  const setComboRemoteCompaction = (model: OmpRoutableModel | undefined, remoteModelId?: string) => {
+    if (!model || !comboIds.has(model.id) || format !== "responses") return;
+    if (remoteModelId) model.remoteCompaction = { ...OMP_REMOTE_COMPACTION, model: remoteModelId };
+    else delete model.remoteCompaction;
+  };
+  const bindRouteName = (model: OmpRoutableModel | undefined): string | undefined => {
     if (!model || !modelIds.has(model.id)) return undefined;
     const modelId = model.id;
     Object.defineProperty(model, "name", {
@@ -81,18 +107,30 @@ function createOmpRouteStream(
   };
   const resetRouteState = (_event: { payload?: unknown }, context: OmpContext) => {
     routeNames.clear();
+    setComboRemoteCompaction(context.model);
     bindRouteName(context.model);
+    // Extension contexts expose a live model getter. Reading it when the response
+    // arrives handles OMP restoring a resumed model after session_switch.
+    getActiveModel = () => context.model;
   };
 
   api.on("session_start", resetRouteState);
   api.on("session_switch", resetRouteState);
 
   return (model, context, options) => {
-    const requestedModel = bindRouteName(model);
+    // streamOpenAICompletions narrows Model's API generic, while OMP intentionally
+    // allows remote compaction to use Responses against the same provider model.
+    const routableModel = model as unknown as OmpRoutableModel;
+    const requestedModel = bindRouteName(routableModel);
     const callerFetch = options?.fetch ?? fetch;
     if (requestedModel && !comboIds.has(requestedModel)) routeNames.delete(requestedModel);
     const updateRouteName = (routedModel: string) => {
       routeNames.set(requestedModel!, resolvedRouteStatus(requestedModel!, routedModel));
+    };
+    const updateCompactionRoute = (routedModel: string, routedProvider?: string) => {
+      if (getActiveModel && getActiveModel() !== routableModel) return;
+      const routeIds = routedProvider ? [`${routedProvider}/${routedModel}`, routedModel] : [routedModel];
+      setComboRemoteCompaction(routableModel, routeIds.find(id => remoteCompactionModelIds.has(id)));
     };
     const simpleOptions = options as OpenAICompletionsOptions & {
       reasoning?: ReasoningEffort;
@@ -116,9 +154,13 @@ function createOmpRouteStream(
         : simpleOptions.reasoningSummary,
       fetch: async (input: string | URL | Request, init?: RequestInit) => {
         const response = await callerFetch(input, init);
+        const routedProvider = response.headers.get("x-omniroute-provider")?.trim();
         if (requestedModel) {
           const routedModel = response.headers.get("x-omniroute-model")?.trim();
-          if (routedModel) updateRouteName(routedModel);
+          if (routedModel) {
+            updateRouteName(routedModel);
+            updateCompactionRoute(routedModel, routedProvider);
+          }
         }
         return stripKeepaliveFrames(response, lines => {
           if (!requestedModel) return;
@@ -199,9 +241,15 @@ export async function activateOmp(
 ): Promise<void> {
   const discovery = await discoverOmpModels(environment, fetcher);
   if (!discovery) return;
-  const { config, catalog: { models } } = discovery;
+  const { config, catalog: { models, remoteCompactionModelIds } } = discovery;
   const modelIds = new Set(models.map(model => model.id));
   const comboIds = new Set(models.filter(model => model.isCombo).map(model => model.id));
+  const ompModels = models.map(model => ({
+    ...model,
+    ...(config.format === "responses" && remoteCompactionModelIds.has(model.id)
+      ? { remoteCompaction: OMP_REMOTE_COMPACTION }
+      : {}),
+  }));
   api.on("before_provider_request", event => withReasoningEffort(
     event.payload,
     modelIds,
@@ -213,7 +261,7 @@ export async function activateOmp(
     baseUrl: `${config.baseUrl}/v1`,
     apiKey: config.apiKey,
     api: HOST_API_BY_FORMAT[config.format],
-    streamSimple: createOmpRouteStream(api, modelIds, comboIds, config.format),
-    models,
+    streamSimple: createOmpRouteStream(api, modelIds, comboIds, remoteCompactionModelIds, config.format),
+    models: ompModels,
   });
 }

@@ -10,7 +10,11 @@ interface RegisteredProvider {
   baseUrl: string;
   apiKey: string;
   api: string;
-  models: Array<{ id: string; name?: string }>;
+  models: Array<{
+    id: string;
+    name?: string;
+    remoteCompaction?: { enabled: true; api: "openai-responses"; v2StreamingEnabled: true; model?: string };
+  }>;
   streamSimple?: (...args: any[]) => AsyncIterable<unknown>;
 }
 
@@ -322,6 +326,7 @@ describe("OMP adapter", () => {
     expect(subagentHost.provider).toBeDefined();
     expect(subagentHost.provider?.config.apiKey).toBe("secret");
     expect(subagentHost.provider?.config.models.map(model => model.id)).toEqual(["combo/coding"]);
+    expect(subagentHost.provider!.config.models[0]).not.toBe(mainHost.provider!.config.models[0]);
   });
 
   test("does not reuse cached discovery across connection settings", async () => {
@@ -430,6 +435,77 @@ describe("OMP adapter", () => {
     if (reroutedEvents) for await (const _event of reroutedEvents) { /* consume the provider stream */ }
     expect(context.model?.name).toBe("combo/coding▸vendor/different-model");
   });
+  test("enables Responses V2 compaction only while a combo resolves to a capable route", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "omniroute-omp-remote-compaction-"));
+    writeFileSync(join(agentDir, "omniroute.yml"), "format: responses\n");
+    const host = new FakeOmpHost();
+    await activateOmp(host, isolatedEnv({ PI_CODING_AGENT_DIR: agentDir }), async () => Response.json({
+      data: [
+        { id: "combo/coding", owned_by: "combo" },
+        { id: "cx/gpt-5.6-sol", owned_by: "codex" },
+        { id: "anthropic/claude-sonnet-5", owned_by: "anthropic" },
+      ],
+    }));
+
+    const registeredCombo = host.provider!.config.models.find(entry => entry.id === "combo/coding")!;
+    const directCodex = host.provider!.config.models.find(entry => entry.id === "cx/gpt-5.6-sol")!;
+    expect(registeredCombo.remoteCompaction).toBeUndefined();
+    expect(directCodex.remoteCompaction).toEqual({
+      enabled: true,
+      api: "openai-responses",
+      v2StreamingEnabled: true,
+    });
+
+    const model = {
+      ...registeredCombo,
+      name: "combo/coding",
+      provider: "omniroute",
+      api: "omniroute-openai-responses",
+      baseUrl: "http://router.test/v1",
+    };
+    const context = fakeContext(model);
+    host.emit("session_start", context);
+    const run = async (
+      streamModel: typeof model,
+      provider: string,
+      routedModel: string,
+      bodyModel: string = routedModel,
+    ) => {
+      const events = host.provider!.config.streamSimple!(streamModel, { messages: [] } as never, {
+        apiKey: "secret",
+        fetch: async () => new Response(
+          `data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"${bodyModel}"}}\n\n`,
+          {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "X-OmniRoute-Provider": provider,
+              "X-OmniRoute-Model": routedModel,
+            },
+          },
+        ),
+      });
+      for await (const _event of events) { /* consume the provider stream */ }
+    };
+
+    await run(model, "cx", "gpt-5.6-sol", "gpt-5.6-sol-2026-07-30");
+    expect(model.remoteCompaction).toEqual({
+      enabled: true,
+      api: "openai-responses",
+      v2StreamingEnabled: true,
+      model: "cx/gpt-5.6-sol",
+    });
+
+    const sideModel = { ...model };
+    await run(sideModel, "anthropic", "claude-sonnet-5");
+    expect(sideModel.remoteCompaction).toEqual(model.remoteCompaction);
+
+    await run(model, "anthropic", "claude-sonnet-5");
+    expect(model.remoteCompaction).toBeUndefined();
+
+    await run(model, "cx", "gpt-5.6-sol");
+    host.emit("session_switch", context);
+    expect(model.remoteCompaction).toBeUndefined();
+  }, 10_000);
   test("uses owned_by metadata instead of model-id prefix for combo persistence", async () => {
     const host = new FakeOmpHost();
     await activateOmp(host, isolatedEnv(), async () => Response.json({

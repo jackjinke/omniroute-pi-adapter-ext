@@ -29,6 +29,8 @@ export interface OmniRouteModel {
 
 export interface OmniRouteCatalog {
   models: OmniRouteModel[];
+  /** Direct OmniRoute catalog IDs backed by providers with native Responses compaction. */
+  remoteCompactionModelIds: Set<string>;
 }
 
 export type OmniRouteApiFormat = "chat_completions" | "responses";
@@ -177,16 +179,21 @@ export function normalizeCatalog(
   }
 
   const models: OmniRouteModel[] = [];
+  const remoteCompactionModelIds = new Set<string>();
   for (const entry of payload.data) {
     if (!entry || typeof entry !== "object") continue;
-    const isCombo = "owned_by" in entry
-      && typeof entry.owned_by === "string"
-      && entry.owned_by.trim().toLowerCase() === "combo";
+    const owner = "owned_by" in entry && typeof entry.owned_by === "string"
+      ? entry.owned_by.trim().toLowerCase()
+      : undefined;
+    const isCombo = owner === "combo";
     if (!("id" in entry) || typeof entry.id !== "string" || !entry.id.trim()) continue;
     const id = entry.id.trim();
     const capabilities = "capabilities" in entry && entry.capabilities && typeof entry.capabilities === "object"
       ? entry.capabilities
       : {};
+    // OmniRoute guarantees Responses compaction passthrough only for its native
+    // Codex provider. Other Responses-compatible owners expose no such contract.
+    if (owner === "codex") remoteCompactionModelIds.add(id);
     const reasoning = !("reasoning" in capabilities && capabilities.reasoning === false)
       && !("thinking" in capabilities && capabilities.thinking === false);
     const structuredOutput = readStructuredOutput(capabilities);
@@ -224,7 +231,7 @@ export function normalizeCatalog(
   }
 
   if (models.length === 0) throw new Error("OmniRoute /v1/models returned no usable models");
-  return { models };
+  return { models, remoteCompactionModelIds };
 }
 
 export async function discoverModels(
