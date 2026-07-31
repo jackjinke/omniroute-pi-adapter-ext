@@ -8,7 +8,6 @@ OmniRoute adapter for Pi 0.80.10+ and OMP 17.0.5+.
 - Uses each entry's `capabilities.effort_tiers` when OmniRoute supplies it.
 - Otherwise exposes `low`, `medium`, `high`, `xhigh`, and `max`; override per entry in `omniroute.yml`.
 - OMP shows the requested and routed model IDs only when they differ, in both API formats.
-- With OMP's `responses` format, enables V2 remote compaction after a combo resolves to a cataloged Codex route, pins compaction to that exact direct route, and disables it again after an unsupported reroute or session switch so OMP's configured fallback handles compaction.
 - Drops OmniRoute's synthetic slow-start keepalive frames so they never surface as thinking text or as a routed model named `omniroute`. The keepalive still does its job: the early HTTP commit that keeps the connection alive is untouched.
 - Logs a warning and lets the host continue when startup discovery fails.
 
@@ -71,8 +70,6 @@ format: responses # chat_completions (default) or responses
 ```
 
 `responses` uses OpenAI's native Responses API at `/v1/responses` in both Pi and OMP. Omitting `format` keeps Chat Completions behavior.
-
-Dynamic combo remote compaction requires `format: responses`. Until a Codex route is observed—and whenever routing changes to a non-Codex model—the combo advertises no remote compaction capability, leaving OMP's normal compaction model and strategy unchanged.
 
 The exact effort entry takes precedence over `*`, then OmniRoute's `effort_tiers`, then the built-in `low,medium,high,xhigh,max` default.
 
