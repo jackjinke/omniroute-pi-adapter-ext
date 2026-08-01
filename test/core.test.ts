@@ -556,10 +556,10 @@ describe("OMP adapter", () => {
     expect(context.model?.name).toBe("combo/coding▸vendor/main-model");
   });
 
-  test("keeps a direct model label plain when no routing occurs", async () => {
+  test("keeps a direct model label plain even when the router reports another model", async () => {
     const host = new FakeOmpHost();
     await activateOmp(host, isolatedEnv(), async () => Response.json({
-      data: [{ id: "direct/model" }],
+      data: [{ id: "direct/model" }, { id: "combo/coding", owned_by: "combo" }],
     }));
     const context = fakeContext({ id: "direct/model", name: "direct/model" });
     host.emit("session_start", context);
@@ -570,18 +570,29 @@ describe("OMP adapter", () => {
       api: "omniroute-openai-completions",
       baseUrl: "http://router.test/v1",
     } as never;
-    const events = host.provider?.config.streamSimple?.(
-      model,
-      { messages: [] } as never,
-      {
-        apiKey: "secret",
-        fetch: async () => new Response(": x-omniroute-model=direct/model\n\ndata: [DONE]\n\n", {
-          headers: { "Content-Type": "text/event-stream" },
-        }),
-      },
-    );
-    if (events) for await (const _event of events) { /* consume the provider stream */ }
+    const streamFor = async (body: string, headers: Record<string, string>) => {
+      const events = host.provider?.config.streamSimple?.(
+        model,
+        { messages: [] } as never,
+        {
+          apiKey: "secret",
+          fetch: async () => new Response(body, {
+            headers: { "Content-Type": "text/event-stream", ...headers },
+          }),
+        },
+      );
+      if (events) for await (const _event of events) { /* consume the provider stream */ }
+    };
 
+    await streamFor(": x-omniroute-model=direct/model\n\ndata: [DONE]\n\n", {});
+    expect(context.model?.name).toBe("direct/model");
+
+    // A direct id is its own route: vendor aliasing in the trailer or the header
+    // must never turn the status line into "requested▸routed".
+    await streamFor(": x-omniroute-model=vendor/direct-model\n\ndata: [DONE]\n\n", {});
+    expect(context.model?.name).toBe("direct/model");
+
+    await streamFor("data: [DONE]\n\n", { "x-omniroute-model": "vendor/direct-model" });
     expect(context.model?.name).toBe("direct/model");
   });
 

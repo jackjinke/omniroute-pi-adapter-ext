@@ -99,9 +99,11 @@ function createOmpRouteStream(
     const routableModel = model as unknown as OmpRoutableModel;
     const requestedModel = bindRouteName(routableModel);
     const callerFetch = options?.fetch ?? fetch;
-    if (requestedModel && !comboIds.has(requestedModel)) routeNames.delete(requestedModel);
+    // Only combos resolve to a different underlying model; a direct id is its own
+    // route, so its status line must stay plain even if the router renames it.
+    const comboModel = requestedModel && comboIds.has(requestedModel) ? requestedModel : undefined;
     const updateRouteName = (routedModel: string) => {
-      routeNames.set(requestedModel!, resolvedRouteStatus(requestedModel!, routedModel));
+      routeNames.set(comboModel!, resolvedRouteStatus(comboModel!, routedModel));
     };
     const simpleOptions = options as OpenAICompletionsOptions & {
       reasoning?: ReasoningEffort;
@@ -125,12 +127,12 @@ function createOmpRouteStream(
         : simpleOptions.reasoningSummary,
       fetch: async (input: string | URL | Request, init?: RequestInit) => {
         const response = await callerFetch(input, init);
-        if (requestedModel) {
+        if (comboModel) {
           const routedModel = response.headers.get("x-omniroute-model")?.trim();
           if (routedModel) updateRouteName(routedModel);
         }
         return stripKeepaliveFrames(response, lines => {
-          if (!requestedModel) return;
+          if (!comboModel) return;
           const routedModel = extractOmniRouteModel(lines);
           if (routedModel) updateRouteName(routedModel);
         });
