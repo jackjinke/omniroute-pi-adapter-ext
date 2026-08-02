@@ -294,6 +294,23 @@ describe("shared catalog logic", () => {
 });
 
 describe("OMP adapter", () => {
+  test("does not install process-wide fatal handlers during guarded activation", () => {
+    const fixture = join(import.meta.dir, "fixtures", "guarded-omp-activation.ts");
+    const result = Bun.spawnSync({ cmd: [process.execPath, fixture] });
+    const stderr = result.stderr.toString();
+
+    expect(result.exitCode, stderr).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual({
+      providerRegistrations: 1,
+      uncaughtException: 0,
+      unhandledRejection: 0,
+      exit: 0,
+      SIGINT: 0,
+      SIGTERM: 0,
+      SIGHUP: 0,
+      SIGUSR1: 0,
+    });
+  });
   test("registers fetched models before activation resolves", async () => {
     const host = new FakeOmpHost();
     await activateOmp(

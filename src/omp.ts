@@ -1,7 +1,8 @@
-import {
+import type {
+  AssistantMessageEventStream,
+  OpenAICompletionsOptions,
   streamOpenAICompletions,
   streamOpenAIResponses,
-  type OpenAICompletionsOptions,
 } from "@oh-my-pi/pi-ai";
 import {
   extractOmniRouteModel,
@@ -51,6 +52,35 @@ const PROVIDER_API_BY_FORMAT = {
   chat_completions: "openai-completions",
   responses: "openai-responses",
 } as const satisfies Record<OmniRouteApiFormat, string>;
+
+interface PiAiStreams {
+  streamOpenAICompletions: typeof streamOpenAICompletions;
+  streamOpenAIResponses: typeof streamOpenAIResponses;
+}
+
+let piAiStreamsPromise: Promise<PiAiStreams> | undefined;
+
+function loadPiAiStreams(): Promise<PiAiStreams> {
+  // OMP evaluates extension modules and factories while process.exit/reallyExit
+  // are guarded. pi-ai loads pi-utils/postmortem, which must only capture the
+  // restored host functions after activation has completed.
+  piAiStreamsPromise ??= import("@oh-my-pi/pi-ai");
+  return piAiStreamsPromise;
+}
+
+function deferredStream(stream: Promise<AssistantMessageEventStream>): AssistantMessageEventStream {
+  // Provider consumers use the stream's async iterator and terminal result;
+  // the real pi-ai stream retains event classification and abort semantics.
+  void stream.catch(() => {});
+  return {
+    async *[Symbol.asyncIterator]() {
+      yield* await stream;
+    },
+    async result() {
+      return (await stream).result();
+    },
+  } as unknown as AssistantMessageEventStream;
+}
 
 interface OmpProviderConfig {
   name: string;
@@ -144,9 +174,10 @@ function createOmpRouteStream(
       api: PROVIDER_API_BY_FORMAT[format],
       compat: { ...model.compat },
     };
-    return format === "responses"
-      ? streamOpenAIResponses(providerModel as never, context, wrappedOptions as never)
-      : streamOpenAICompletions(providerModel as never, context, wrappedOptions);
+    const stream = loadPiAiStreams().then(streams => format === "responses"
+      ? streams.streamOpenAIResponses(providerModel as never, context, wrappedOptions as never)
+      : streams.streamOpenAICompletions(providerModel as never, context, wrappedOptions));
+    return deferredStream(stream);
   };
 }
 
